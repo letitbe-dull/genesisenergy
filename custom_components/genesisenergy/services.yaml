@@ -1,0 +1,90 @@
+# This is the services.yaml file for the genesisenergy integration.
+
+add_powershout_booking:
+  name: Add Power Shout Booking
+  description: "Books a Genesis Energy Power Shout for your electricity account."
+  fields:
+    start_datetime:
+      name: Start Datetime
+      description: "The date and time (in your Home Assistant's local timezone) for the Power Shout to begin."
+      required: true
+      example: "2025-06-15 18:00:00"
+      selector:
+        datetime: {}
+    duration_hours:
+      name: Duration
+      description: "The duration of the Power Shout in hours (e.g., 1, 2, 3, or 4)."
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: slider
+          unit_of_measurement: "hr"
+
+accept_powershout_offer:
+  name: Accept Power Shout Offer
+  description: "Accepts a pending Genesis Energy Power Shout offer to add hours to your balance."
+  fields:
+    offer_id:
+      name: Offer ID
+      description: "The GUID of the Power Shout offer to accept (e.g. from the 'active_offers' attribute of the Power Shout Balance sensor)."
+      required: true
+      example: "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+      selector:
+        text: {}
+
+backfill_statistics:
+  name: Backfill Historical Statistics
+  description: >
+    Fetches a specified number of days of historical usage data to backfill the
+    long-term statistics.
+  fields:
+    days_to_fetch:
+      name: Days to Fetch
+      description: "The total number of past days of data to retrieve."
+      required: true
+      example: 90
+      selector:
+        number:
+          min: 1
+          max: 730 # ~2 years
+          step: 1
+          mode: box
+    fuel_type:
+      name: Fuel Type
+      description: "Select which fuel type to backfill. 'both' will fetch for electricity and gas."
+      required: true
+      example: "electricity"
+      selector:
+        select:
+          options:
+            - "electricity"
+            - "gas"
+            - "both"
+    force_overwrite:
+      name: Force Overwrite
+      description: "If enabled, ignores existing data and re-fetches the entire period. Use this to fix corrupted or missing days."
+      required: true  
+      example: false
+      selector:
+        boolean: {}
+
+force_update:
+  name: Force Data Update
+  description: >
+    Triggers an immediate poll of the Genesis Energy API to fetch the latest data for all sensors.
+  fields:
+    fuel_type:
+      name: Fuel Type
+      description: "Select which data to prioritize for refresh, or 'both' for a full refresh."
+      required: true
+      example: "both"
+      selector:
+        select:
+          options:
+            - "electricity"
+            - "gas"
+            - "both"

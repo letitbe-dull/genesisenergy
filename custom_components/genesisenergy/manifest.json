@@ -1,0 +1,14 @@
+{
+  "domain": "genesisenergy",
+  "name": "Genesis Energy",
+  "codeowners": ["@letitbe-dull"],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/letitbe-dull/genesisenergy",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/letitbe-dull/genesisenergy/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
