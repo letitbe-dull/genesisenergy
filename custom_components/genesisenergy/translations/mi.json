@@ -1,0 +1,41 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Kua rite kē te whirihora pūkete",
+            "reauth_successful": "I angitu te whakamana anō"
+        },
+        "error": {
+            "cannot_connect": "I rahua te hono atu",
+            "invalid_auth": "He whakamana muhu",
+            "unknown": "He hapa ohorere"
+        },
+        "step": {
+            "user": {
+                "title": "Genesis Energy",
+                "description": "Whakauruhia ō taipitopito takiuru My Genesis.",
+                "data": {
+                    "email": "Wāhitau īmēra",
+                    "password": "Kupuhipa"
+                }
+            },
+            "reauth_confirm": {
+                "title": "Genesis Energy",
+                "description": "Kua pau te wā mō tō takiuru Genesis Energy. Whakauruhia anō te kupuhipa mō {email}.",
+                "data": {
+                    "password": "Kupuhipa"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Ngā Tautuhinga Whakatōpū Raraunga",
+                "description": "He maha ngā wā ka whakaroaina ngā raraunga Hiko me te Hau (GAS) a Genesis Energy mō te 24-48 hāora.\n\n**Whakatika-aunoa ā-rā**\nMēnā ka whakahohea, ka mahi tēnei whakaurunga i tētahi whakatōpūtanga motuhake ia rā, i muri i te **1:00 i te ahiahi**. Ka tikina anō, ka **tuhi anō** ngā tatauranga mō ngā rā kua pahure ake nei kia whakakīia ngā āputa, kia whakatikaina hoki ngā whakatau tata taupua i whakaratohia e Genesis.\n\nWhakahohea tēnei mēnā ka kite koe i te ngaro o ētahi raraunga, i ētahi rerekētanga rānei i tō Papatohu Pūngao.",
+                "data": {
+                    "enable_auto_correction": "Whakahohe i te Whakatika-aunoa ā-rā"
+                }
+            }
+        }
+    }
+}
