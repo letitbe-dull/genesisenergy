@@ -2,13 +2,12 @@
 from datetime import datetime, timedelta, timezone
 import asyncio
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.components.recorder import get_instance
 from homeassistant.util import dt as dt_util
@@ -21,13 +20,12 @@ from .const import (
     DEVICE_MANUFACTURER, DEVICE_MODEL, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE,
     DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_BALANCE, DATA_API_POWERSHOUT_BOOKINGS,
     DATA_API_POWERSHOUT_OFFERS, DATA_API_POWERSHOUT_EXPIRING, DATA_API_BILLING_PLANS,
-    DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_AGGREGATED_ELEC_BILL,
-    ATTR_FUEL_TYPE, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER,
+    DATA_API_WIDGET_HERO, DATA_API_WIDGET_BILLS, DATA_API_WIDGET_PROPERTY_LIST, DATA_API_WIDGET_PROPERTY_SWITCHER,
     DATA_API_WIDGET_SIDEKICK, DATA_API_WIDGET_DASHBOARD_POWERSHOUT,
     DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST,
     DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION,
     DATA_API_GENERATION_MIX, DATA_API_EV_PLAN_USAGE, DATA_API_ELECTRICITY_FORECAST,
-    DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_LPG_DETAILS, DATA_API_LPG_DETAILS,
+    DATA_API_USAGE_BREAKDOWN, DATA_API_LPG_DETAILS,
     CONF_ACCESS_TOKEN, CONF_ACCESS_TOKEN_EXPIRY, CONF_REFRESH_TOKEN, CONF_REFRESH_TOKEN_EXPIRY
 )
 
@@ -36,7 +34,10 @@ if TYPE_CHECKING:
 
 
 class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
-    config_entry: ConfigEntry; api: GenesisEnergyApi; device_info: DeviceInfo
+    config_entry: ConfigEntry
+    api: GenesisEnergyApi
+    device_info: DeviceInfo
+
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
         # Snapshot options so token persistence (a data-only write) doesn't trigger a reload.
@@ -75,9 +76,12 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             # so a credential failure can trigger HA's reauth flow.
             await self.api.async_login()
             return await self._async_fetch_all_data()
-        except InvalidAuth as err: raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
-        except (CannotConnect, ApiError) as err: raise UpdateFailed(f"Error communicating with API: {err}") from err
-        except Exception as err: raise UpdateFailed(f"Unexpected error updating data: {err}") from err
+        except InvalidAuth as err:
+            raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
+        except (CannotConnect, ApiError) as err:
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
+        except Exception as err:
+            raise UpdateFailed(f"Unexpected error updating data: {err}") from err
 
     async def _async_fetch_all_data(self) -> dict[str, any]:
         """Fetch all data from the API in parallel."""

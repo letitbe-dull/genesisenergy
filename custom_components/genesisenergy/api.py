@@ -100,12 +100,14 @@ class GenesisEnergyApi:
     def _get_setting_json(self, page: str) -> Mapping[str, Any] | None:
         marker = _SETTINGS_MARKER_RE.search(page)
         if not marker:
-            _LOGGER.warning("SETTINGS variable not found."); return None
+            _LOGGER.warning("SETTINGS variable not found.")
+            return None
         try:
             settings, _ = json.JSONDecoder().raw_decode(page, marker.end())
             return settings
         except json.JSONDecodeError as e:
-            _LOGGER.error(f"JSONDecodeError parsing SETTINGS: {e}"); return None
+            _LOGGER.error(f"JSONDecodeError parsing SETTINGS: {e}")
+            return None
 
     async def _perform_full_login(self) -> bool:
         """Performs a full login using a temporary, clean session and manual cookie management."""
@@ -133,9 +135,11 @@ class GenesisEnergyApi:
                     r_s1.raise_for_status()
                 _LOGGER.info("Login Step 1: Fetching initial auth page...✅")
                 sjson = self._get_setting_json(txt_s1)
-                if not sjson: raise CannotConnect("Login S1: no settings_json")
+                if not sjson:
+                    raise CannotConnect("Login S1: no settings_json")
                 tid, csrf = sjson.get("transId"), sjson.get("csrf")
-                if not tid or not csrf: raise CannotConnect("Login S1: no tid/csrf")
+                if not tid or not csrf:
+                    raise CannotConnect("Login S1: no tid/csrf")
                 
                 # Step 2
                 url_s2 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
@@ -154,8 +158,10 @@ class GenesisEnergyApi:
                     update_cookies_from_response(r_s3)
                     r_s3.raise_for_status()
                 _LOGGER.info("Login Step 3: Confirming email...✅")
-                if 'x-ms-cpim-csrf' in cookies: csrf = cookies['x-ms-cpim-csrf']
-                else: raise CannotConnect("Login S3: CSRF cookie missing after confirm")
+                if 'x-ms-cpim-csrf' in cookies:
+                    csrf = cookies['x-ms-cpim-csrf']
+                else:
+                    raise CannotConnect("Login S3: CSRF cookie missing after confirm")
 
                 # Step 4
                 url_s4 = f"{self._url_token_base}/{self._p}/SelfAsserted?tx={tid}&p={self._p}"
@@ -165,7 +171,8 @@ class GenesisEnergyApi:
                     update_cookies_from_response(r_s4)
                     if r_s4.status != 200:
                         s4_text = await r_s4.text()
-                        if "The username or password provided in the request are invalid" in s4_text: raise InvalidAuth("Invalid username or password.")
+                        if "The username or password provided in the request are invalid" in s4_text:
+                            raise InvalidAuth("Invalid username or password.")
                         r_s4.raise_for_status()
                 _LOGGER.info("Login Step 4: Posting password...✅")
 
@@ -174,32 +181,40 @@ class GenesisEnergyApi:
                 p_s5 = {'rememberMe': 'false', 'csrf_token': csrf, 'tx': tid, 'p': self._p}
                 hdr_s5 = {**base_headers, 'Cookie': get_cookie_header()}
                 async with session.get(url_s5, params=p_s5, headers=hdr_s5, allow_redirects=False) as r_s5:
-                    if r_s5.status != 302: raise CannotConnect(f"Login S5: status {r_s5.status}")
+                    if r_s5.status != 302:
+                        raise CannotConnect(f"Login S5: status {r_s5.status}")
                     loc = r_s5.headers.get('Location', '')
                 _LOGGER.info("Login Step 5: Finalizing login to get redirect...✅")
-                if not loc: raise CannotConnect("Login S5: no location header")
+                if not loc:
+                    raise CannotConnect("Login S5: no location header")
                 
                 # Step 6
                 qpr = parse_qs(loc.split('?', 1)[1])
-                if 'error' in qpr: raise InvalidAuth(f"Login S5 error: {qpr['error'][0]}")
-                if 'code' not in qpr: raise CannotConnect("Login S5: no auth code")
+                if 'error' in qpr:
+                    raise InvalidAuth(f"Login S5 error: {qpr['error'][0]}")
+                if 'code' not in qpr:
+                    raise CannotConnect("Login S5: no auth code")
                 code = qpr['code'][0]
                 url_s6 = f"{self._url_token_base}/{self._p}/oauth2/v2.0/token"
                 p_s6 = {'p': self._p, 'grant_type': 'authorization_code', 'client_id': self._client_id, 'scope': f'openid offline_access {self._client_id}', 'redirect_uri': self._redirect_uri, 'code': code}
                 async with session.get(url_s6, params=p_s6, headers=base_headers) as r_s6:
                     if r_s6.status == 200:
                         data_s6 = await r_s6.json()
-                        self._token = data_s6.get('access_token'); self._refresh_token = data_s6.get('refresh_token')
-                        expires_in = data_s6.get('expires_in', 0); rt_expires_in = data_s6.get('refresh_token_expires_in', 0)
+                        self._token = data_s6.get('access_token')
+                        self._refresh_token = data_s6.get('refresh_token')
+                        expires_in = data_s6.get('expires_in', 0)
+                        rt_expires_in = data_s6.get('refresh_token_expires_in', 0)
                         now_ts = datetime.now(timezone.utc).timestamp()
                         self._access_token_absolute_expiry_ts = (now_ts + int(expires_in)) if expires_in else 0
                         self._refresh_token_absolute_expiry_ts = (now_ts + int(rt_expires_in)) if rt_expires_in else 0
-                        if not self._token: raise InvalidAuth("Login S6: no access token")
+                        if not self._token:
+                            raise InvalidAuth("Login S6: no access token")
                         _LOGGER.info("Login Step 6: Exchanging code for token...✅")
                         _LOGGER.info("Genesis Energy Full login successful.✅")
                         self._notify_token_update()
                         return True
-                    else: raise CannotConnect(f"Login S6: status {r_s6.status}")
+                    else:
+                        raise CannotConnect(f"Login S6: status {r_s6.status}")
             
             except (InvalidAuth, CannotConnect):
                 # Intentional auth/connection outcomes (e.g. S5 error=server_error on a
@@ -219,7 +234,8 @@ class GenesisEnergyApi:
     async def _refresh_access_token(self) -> bool:
         """Refreshes the access token and handles network errors gracefully."""
         _LOGGER.info("Attempting to refresh access token...")
-        if not self._refresh_token: return False
+        if not self._refresh_token:
+            return False
         
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         async with aiohttp.ClientSession(connector=connector, timeout=REQUEST_TIMEOUT) as session:
@@ -239,7 +255,8 @@ class GenesisEnergyApi:
                             if new_rt and new_rt != self._refresh_token:
                                 self._refresh_token = new_rt
                                 new_rt_expires_in = data.get("refresh_token_expires_in")
-                                if new_rt_expires_in is not None: self._refresh_token_absolute_expiry_ts = now_ts + int(new_rt_expires_in)
+                                if new_rt_expires_in is not None:
+                                    self._refresh_token_absolute_expiry_ts = now_ts + int(new_rt_expires_in)
                                 _LOGGER.info("Refresh token was rotated.✅")
                             self._notify_token_update()
                             return True
@@ -259,7 +276,7 @@ class GenesisEnergyApi:
                 _LOGGER.warning("A network error occurred during token refresh: %s", e)
                 raise CannotConnect(f"Network error during token refresh: {e}") from e
 
-            except Exception as e:
+            except Exception:
                 _LOGGER.exception("An unexpected error occurred during token refresh.")
                 return False
 
@@ -282,21 +299,25 @@ class GenesisEnergyApi:
             except CannotConnect:
                 raise
                 
-            if not await self._perform_full_login(): raise CannotConnect("Full login failed.")
-            if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)): raise InvalidAuth("Token invalid after login.")
+            if not await self._perform_full_login():
+                raise CannotConnect("Full login failed.")
+            if not (self._token and self._access_token_absolute_expiry_ts > (datetime.now(timezone.utc).timestamp() + self.TOKEN_VALIDITY_BUFFER_MINUTES * 60)):
+                raise InvalidAuth("Token invalid after login.")
 
 
     async def _make_api_call(self, method: str, endpoint: str, params: dict | None = None, json_payload: dict | None = None, description: str = "data", expect_json: bool = True) -> Any:
         await self._ensure_valid_token()
         session = await self._get_session()
         headers = {"authorization": "Bearer " + str(self._token), "brand-id": "GENE"}
-        if method.upper() == "POST" and json_payload is not None: headers["Content-Type"] = "application/json"
+        if method.upper() == "POST" and json_payload is not None:
+            headers["Content-Type"] = "application/json"
         
         url = f"{self._url_data_base}{endpoint}"
         try:
             async with session.request(method, url, headers=headers, params=params, json=json_payload) as response:
                 if 200 <= response.status < 300:
-                    if response.status == 204: return True
+                    if response.status == 204:
+                        return True
                     if expect_json:
                         text = await response.text()
                         return json.loads(text) if text else {}
@@ -305,12 +326,15 @@ class GenesisEnergyApi:
                     # Access token rejected mid-call. Clear it so the next call re-logins;
                     # treat as retriable rather than a credential failure (a genuine bad
                     # credential surfaces as InvalidAuth from the login itself).
-                    self._token = None; self._access_token_absolute_expiry_ts = 0
+                    self._token = None
+                    self._access_token_absolute_expiry_ts = 0
                     raise CannotConnect(f"Unauthorized (401) for {description}; token cleared, will re-login")
                 else:
                     raise CannotConnect(f"API error for {description}: {response.status} - {await response.text()}")
-        except aiohttp.ClientError as e: raise CannotConnect(f"HTTP client error for {description}: {e}") from e
-        except json.JSONDecodeError as e: raise CannotConnect(f"Invalid JSON from {description}: {e}") from e
+        except aiohttp.ClientError as e:
+            raise CannotConnect(f"HTTP client error for {description}: {e}") from e
+        except json.JSONDecodeError as e:
+            raise CannotConnect(f"Invalid JSON from {description}: {e}") from e
     
     async def get_energy_data(self, days_to_fetch: int = 4):
         from_date = (datetime.now() - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")

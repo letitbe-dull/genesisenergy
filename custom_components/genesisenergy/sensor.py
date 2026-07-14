@@ -1,5 +1,4 @@
 # custom_components/genesisenergy/sensor.py
-import logging
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Mapping
@@ -16,7 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData, StatisticMeanType
-from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period, async_import_statistics
+from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
 
 from .const import (
     DOMAIN, LOGGER, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE, DATA_API_POWERSHOUT_INFO,
@@ -36,9 +35,8 @@ from .const import (
     SENSOR_KEY_EV_NIGHT_COST, SENSOR_KEY_EV_TOTAL_SAVINGS,
     DATA_API_ELECTRICITY_FORECAST, SENSOR_KEY_FORECAST_USAGE, SENSOR_KEY_FORECAST_COST,
     DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_BREAKDOWN_APPLIANCES, SENSOR_KEY_BREAKDOWN_ELECTRONICS,
-    SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER, DATA_API_LPG_DETAILS, SENSOR_KEY_LPG_DETAILS,
-    SENSOR_KEY_LPG_ORDER_STATUS, SENSOR_KEY_LPG_DELIVERY_HISTORY, SENSOR_KEY_LPG_DELIVERY_SUMMARY, DATA_API_LPG_ORDER_STATUS,
-    DATA_API_LPG_DELIVERY_HISTORY, DATA_API_LPG_DELIVERY_SUMMARY, DATA_API_LPG_DETAILS, CONF_ENABLE_AUTO_CORRECTION, DAILY_OVERWRITE_HOUR
+    SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER, SENSOR_KEY_LPG_DETAILS,
+    DATA_API_LPG_DETAILS, CONF_ENABLE_AUTO_CORRECTION, DAILY_OVERWRITE_HOUR
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
@@ -160,7 +158,9 @@ class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], Se
         return {"data": data}
 
 class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
-    _attr_has_entity_name = True; _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, fuel_type: str):
         super().__init__(coordinator)
         self._fuel_type = fuel_type
@@ -179,8 +179,10 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
 
     @property
     def native_value(self) -> str:
-        if self.coordinator.data and (api_data := self.coordinator.data.get(self._data_key)) and api_data.get("usage"): return "ok"
-        elif self.coordinator.last_update_success: return "no_data"
+        if self.coordinator.data and (api_data := self.coordinator.data.get(self._data_key)) and api_data.get("usage"):
+            return "ok"
+        elif self.coordinator.last_update_success:
+            return "no_data"
         return "error"
 
     @callback
@@ -233,10 +235,12 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
         self.async_write_ha_state()
 
     async def async_process_statistics_data(self, usage_data: list, force_overwrite: bool = False, start_date: date | None = None):
-        if not usage_data: return
+        if not usage_data:
+            return
         try:
             sorted_usage_data = sorted(usage_data, key=lambda x: x['startDate'])
-        except (KeyError, TypeError): return
+        except (KeyError, TypeError):
+            return
         
         LOGGER.info(f"  Processing {len(usage_data)} entries for {self._fuel_type} (Force Overwrite: {force_overwrite})")
 
@@ -287,7 +291,8 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
                     value = float(entry[value_key])
                     start_dt_utc = datetime.fromisoformat(entry['startDate']).astimezone(self._utc_tz)
                     start_ts = start_dt_utc.timestamp()
-                except (KeyError, ValueError, TypeError): continue
+                except (KeyError, ValueError, TypeError):
+                    continue
                 
                 if start_ts > last_ts:
                     running_sum += value
@@ -617,8 +622,10 @@ class ElectricityUsedSensor(GenesisBillSensor):
         sidekick_data = self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK, {})
         for supply in sidekick_data.get('supplyTypesArea', {}).get('supplyTypes', []):
             if supply.get('type') == 'electricity':
-                try: return float(supply.get('value'))
-                except (ValueError, TypeError): return None
+                try:
+                    return float(supply.get('value'))
+                except (ValueError, TypeError):
+                    return None
         return 0.0
 
 class GasUsedSensor(GenesisBillSensor):
@@ -630,8 +637,10 @@ class GasUsedSensor(GenesisBillSensor):
         sidekick_data = self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK, {})
         for supply in sidekick_data.get('supplyTypesArea', {}).get('supplyTypes', []):
             if supply.get('type') == 'naturalGas':
-                try: return float(supply.get('value'))
-                except (ValueError, TypeError): return None
+                try:
+                    return float(supply.get('value'))
+                except (ValueError, TypeError):
+                    return None
         return 0.0
 
 class TotalUsedSensor(GenesisBillSensor):
@@ -642,8 +651,10 @@ class TotalUsedSensor(GenesisBillSensor):
     def native_value(self) -> float | None:
         sidekick_data = self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK, {})
         if (value := sidekick_data.get('titleArea', {}).get('value')) is not None:
-            try: return float(value)
-            except (ValueError, TypeError): return None
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return None
         return None
 
 class EstimatedTotalSensor(GenesisBillSensor):
@@ -655,8 +666,10 @@ class EstimatedTotalSensor(GenesisBillSensor):
         sidekick_data = self.coordinator.data.get(DATA_API_WIDGET_SIDEKICK, {})
         title = sidekick_data.get('billArea', {}).get('title')
         if title and '$' in title:
-            try: return float(title.split('$')[1])
-            except (ValueError, IndexError): return None
+            try:
+                return float(title.split('$')[1])
+            except (ValueError, IndexError):
+                return None
         return None
 
 class EstimatedFutureUseSensor(GenesisBillSensor):
@@ -669,11 +682,15 @@ class EstimatedFutureUseSensor(GenesisBillSensor):
         estimated_val, used_val = 0.0, 0.0
         title = sidekick_data.get('billArea', {}).get('title')
         if title and '$' in title:
-            try: estimated_val = float(title.split('$')[1])
-            except (ValueError, IndexError): pass
+            try:
+                estimated_val = float(title.split('$')[1])
+            except (ValueError, IndexError):
+                pass
         if (value := sidekick_data.get('titleArea', {}).get('value')) is not None:
-            try: used_val = float(value)
-            except (ValueError, TypeError): pass
+            try:
+                used_val = float(value)
+            except (ValueError, TypeError):
+                pass
         future_use = estimated_val - used_val
         return round(future_use, 2) if future_use >= 0 else 0.0
 
@@ -701,13 +718,25 @@ class PowerShoutEligibilitySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoord
 class PowerShoutBalanceSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
-        super().__init__(coordinator); self._attr_device_info = coordinator.device_info; self.entity_description = SensorEntityDescription(key=SENSOR_KEY_POWERSHOUT_BALANCE, name="Power Shout Balance", native_unit_of_measurement="hr", icon="mdi:timer-sand", state_class=SensorStateClass.MEASUREMENT); self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
+        super().__init__(coordinator)
+        self._attr_device_info = coordinator.device_info
+        self.entity_description = SensorEntityDescription(
+            key=SENSOR_KEY_POWERSHOUT_BALANCE,
+            name="Power Shout Balance",
+            native_unit_of_measurement="hr",
+            icon="mdi:timer-sand",
+            state_class=SensorStateClass.MEASUREMENT,
+        )
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{self.entity_description.key}"
+
     @property
     def native_value(self):
         if ps_balance := self.coordinator.data.get(DATA_API_POWERSHOUT_BALANCE):
             if (val := ps_balance.get("balance")) is not None:
-                try: return float(val)
-                except (ValueError, TypeError): return None
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return None
         return None
 
     @property

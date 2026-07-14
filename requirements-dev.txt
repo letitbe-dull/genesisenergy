@@ -1,3 +1,0 @@
-# Dev/test deps for running the standalone probes against the real API.
-# (HA installs the integration's runtime deps from manifest.json itself.)
-aiohttp

@@ -2,8 +2,6 @@
 
 from logging import Logger, getLogger
 from typing import Final
-from homeassistant.helpers.entity import EntityCategory
-from .model import GenesisEnergyBinarySensorEntityDescription
 
 LOGGER: Logger = getLogger(__package__)
 DOMAIN: Final = "genesisenergy"
