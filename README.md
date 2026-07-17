@@ -11,7 +11,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/letitbe-dull/genesisenergy)](https://github.com/letitbe-dull/genesisenergy/commits)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-letitbedull-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/letitbedull)
 
-[Install](#installation) · [Configure](#configuration) · [Energy Dashboard](#using-with-the-energy-dashboard) · [Services](#services) · [Report a Bug](https://github.com/letitbe-dull/genesisenergy/issues/new)
+[Install](#installation) · [Configure](#configuration) · [Power Shout Card](#the-power-shout-card) · [Energy Dashboard](#using-with-the-energy-dashboard) · [Services](#services) · [Report a Bug](https://github.com/letitbe-dull/genesisenergy/issues/new)
 
 </div>
 
@@ -35,9 +35,63 @@ Genesis Energy's web portal sits on a quiet pile of good data - hourly consumpti
 | **Grid Generation** | `Eco-Friendly (%)` for the current hour, with a two-day hourly generation-mix forecast so you can shift the heavy loads to the clean hours. |
 | **EV Plan Sensors** | Day (Peak) and Night (Off-Peak) usage and cost, plus a Savings sensor showing what the EV plan buys you over the standard rate. |
 | **Power Shout** | Eligibility and balance (hours), upcoming bookings, active offers, plus *Booking In Progress* and *Booking Upcoming* binary sensors. |
+| **Power Shout Card** ✨ | A purpose-built Lovelace card - book shouts, accept offers and watch your usage without leaving the dashboard. [See below](#the-power-shout-card). |
 | **Billing Cycle** | Electricity, Gas and Total used, estimated total bill and estimated future use ($). |
 | **Account Details** | One sensor doing the work of a filing cabinet - billing plans, account IDs and the raw dashboard data, all in its attributes. |
 | **Services** | Book and accept Power Shouts, backfill historical statistics, and force an immediate refresh when you can't wait the hour. |
+
+## The Power Shout Card
+
+A dedicated Lovelace card that turns your Power Shout balance into something you can actually *use*, not just read. It pulls together the balance, bookings, offers and forecast that would otherwise be scattered across a dozen sensors, and puts a **Book** button front and centre.
+
+<div align="center">
+<img src="./.github/powershout-card-front.webp" alt="Power Shout card - front face" width="25%">
+&nbsp;&nbsp;
+<img src="./.github/powershout-card-back.webp" alt="Power Shout card - back face (usage breakdown)" width="25%">
+
+<sub><em>Front: balance, live bar, booking and forecast. Back (tap <strong>More usage ↻</strong>): where your power's going.</em></sub>
+
+</div>
+
+### What it does
+
+- **Balance as currency** - your Power Shout hours shown as a balance you *spend*, with your bill balance and due date alongside.
+- **Live "Free power now" bar** - lights up with an animated glow while a shout is actually running, and tells you when it ends.
+- **Book in two taps** - pick a duration (1-4 hrs) and a start time, hit the button. It calls [`add_powershout_booking`](#genesisenergyadd_powershout_booking) for you.
+- **One-tap offers** - when Genesis has an offer going, an *Add to balance* row appears. Accepting is a deliberate tap, never silent.
+- **Today's forecast** - forecast cost with a low/high band, and a **$ ⇄ kWh** toggle. Plus your estimated bill for the period.
+- **Flip for usage** - the back face breaks down where your power's going (Appliances, Electronics, Lighting, Heating, Hot water, Other) and shows your EV plan savings if you're on one.
+- **Light/dark aware** with a mobile fallback (flip is disabled and the back face hidden under ~440px wide).
+
+### Adding it to a dashboard
+
+The card ships **inside the integration** and registers itself as a Lovelace resource automatically - there's nothing to download and no resource URL to paste in.
+
+1. Make sure the integration is installed and configured (see below).
+2. Edit any dashboard → **+ ADD CARD** → search for **Genesis Energy — Power Shout**, or add it by YAML:
+
+   ```yaml
+   type: custom:genesisenergy-powershout-card
+   ```
+
+That's it. The card **auto-discovers** your Power Shout entities, so for a single Genesis account no further config is needed.
+
+<details>
+<summary><strong>Multiple accounts? Point the card at a specific one</strong></summary>
+
+The card finds your entities from the `_power_shout_balance` sensor. If you have more than one Genesis account, name the balance sensor for the account you want and the card derives the rest:
+
+```yaml
+type: custom:genesisenergy-powershout-card
+entity_balance: sensor.genesis_energy_2_power_shout_balance
+```
+
+Any individual entity can also be overridden with its own key (e.g. `entity_forecast_cost`, `entity_ev_savings`) if your setup is unusual.
+
+</details>
+
+> [!NOTE]
+> If the card doesn't appear after installing, do a hard refresh of your browser (**Ctrl+F5**) to clear the cached Lovelace resources. If HA runs in YAML dashboard mode, the auto-registration is skipped - add `/genesisenergy/powershout-card.js` as a **module** resource manually under **Settings → Dashboards → ⋮ → Resources**.
 
 ## Installation
 

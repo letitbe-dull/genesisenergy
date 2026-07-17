@@ -440,6 +440,9 @@ class GenesisEnergyApi:
         
     async def get_billing_plans(self):
         return await self._make_api_call("GET", "/v2/private/billing/plans", description="billing plans")
+    async def get_billing_summary(self):
+        """Gets the current bill balance, amount overdue and due date."""
+        return await self._make_api_call("GET", "/v2/private/billing/summary", description="billing summary")
     async def get_widget_property_list(self):
         return await self._make_api_call("GET", "/v2/private/drd/widget/propertyList", description="widget property list")
     async def get_widget_property_switcher(self):

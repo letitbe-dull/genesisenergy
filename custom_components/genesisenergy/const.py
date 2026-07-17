@@ -45,6 +45,7 @@ DATA_API_NEXT_BEST_ACTION: Final = "api_next_best_action"
 DATA_API_GENERATION_MIX: Final = "api_generation_mix"
 DATA_API_ELECTRICITY_FORECAST: Final = "api_electricity_forecast"
 DATA_API_USAGE_BREAKDOWN: Final = "api_usage_breakdown"
+DATA_API_BILLING_SUMMARY: Final = "api_billing_summary"
 DATA_API_LPG_ORDER_STATUS: Final = "api_lpg_order_status"
 DATA_API_LPG_DELIVERY_HISTORY: Final = "api_lpg_delivery_history"
 DATA_API_LPG_DELIVERY_SUMMARY: Final = "api_lpg_delivery_summary"
@@ -93,6 +94,22 @@ SENSOR_KEY_BREAKDOWN_APPLIANCES: Final = "breakdown_appliances"
 SENSOR_KEY_BREAKDOWN_ELECTRONICS: Final = "breakdown_electronics"
 SENSOR_KEY_BREAKDOWN_LIGHTING: Final = "breakdown_lighting"
 SENSOR_KEY_BREAKDOWN_OTHER: Final = "breakdown_other"
+SENSOR_KEY_BREAKDOWN_HEATING: Final = "breakdown_heating"
+SENSOR_KEY_BREAKDOWN_HOT_WATER: Final = "breakdown_hot_water"
+
+# --- Keys for Plan / Rate / Discount Sensors (from billing/plans) ---
+# Plan, rate and discount sensor keys are built at runtime per supply point,
+# e.g. "plan_electricity", "rate_electricity_anytime", "discount_electricity_ebill".
+SENSOR_KEY_PREFIX_PLAN: Final = "plan"
+SENSOR_KEY_PREFIX_PLAN_TERM_END: Final = "plan_term_end"
+SENSOR_KEY_PREFIX_RATE: Final = "rate"
+SENSOR_KEY_PREFIX_DISCOUNT: Final = "discount"
+
+# --- Keys for Bill Summary Sensors (from billing/summary) ---
+SENSOR_KEY_BILL_BALANCE: Final = "bill_balance"
+SENSOR_KEY_BILL_OVERDUE: Final = "bill_overdue"
+SENSOR_KEY_BILL_DUE_DATE: Final = "bill_due_date"
+SENSOR_KEY_BILL_DUE_DAYS: Final = "bill_due_days"
 
 # --- Device Information ---
 DEVICE_MANUFACTURER: Final = "Genesis Energy"

@@ -36,14 +36,31 @@ from .const import (
     DATA_API_ELECTRICITY_FORECAST, SENSOR_KEY_FORECAST_USAGE, SENSOR_KEY_FORECAST_COST,
     DATA_API_USAGE_BREAKDOWN, SENSOR_KEY_BREAKDOWN_APPLIANCES, SENSOR_KEY_BREAKDOWN_ELECTRONICS,
     SENSOR_KEY_BREAKDOWN_LIGHTING, SENSOR_KEY_BREAKDOWN_OTHER, SENSOR_KEY_LPG_DETAILS,
+    SENSOR_KEY_BREAKDOWN_HEATING, SENSOR_KEY_BREAKDOWN_HOT_WATER,
+    DATA_API_BILLING_SUMMARY, SENSOR_KEY_PREFIX_PLAN, SENSOR_KEY_PREFIX_PLAN_TERM_END,
+    SENSOR_KEY_PREFIX_RATE, SENSOR_KEY_PREFIX_DISCOUNT,
+    SENSOR_KEY_BILL_BALANCE, SENSOR_KEY_BILL_OVERDUE, SENSOR_KEY_BILL_DUE_DATE, SENSOR_KEY_BILL_DUE_DAYS,
     DATA_API_LPG_DETAILS, CONF_ENABLE_AUTO_CORRECTION, DAILY_OVERWRITE_HOUR
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
 
 def safe_json_dumps(data):
     def default_serializer(o):
-        return str(o) 
+        return str(o)
     return json.dumps(data, indent=2, default=default_serializer)
+
+
+def _slug(text: str) -> str:
+    """Lowercase a label into an underscore slug for use in entity keys."""
+    return "".join(c if c.isalnum() else "_" for c in str(text).lower()).strip("_")
+
+
+def _parse_genesis_date(value: Any) -> date | None:
+    """Parse a Genesis date string like '16 Jul 2026' into a date object."""
+    try:
+        return datetime.strptime(value, "%d %b %Y").date()
+    except (ValueError, TypeError):
+        return None
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -84,6 +101,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 UsageBreakdownSensor(coordinator, "Electronics", SENSOR_KEY_BREAKDOWN_ELECTRONICS),
                 UsageBreakdownSensor(coordinator, "Lighting", SENSOR_KEY_BREAKDOWN_LIGHTING),
                 UsageBreakdownSensor(coordinator, "Other", SENSOR_KEY_BREAKDOWN_OTHER),
+                UsageBreakdownSensor(coordinator, "Heating", SENSOR_KEY_BREAKDOWN_HEATING),
+                UsageBreakdownSensor(coordinator, "Hot Water", SENSOR_KEY_BREAKDOWN_HOT_WATER),
             ])
         
     if has_gas:
@@ -125,7 +144,53 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     if coordinator.data.get(DATA_API_LPG_DETAILS):
         LOGGER.info("LPG details data found. Adding LPG sensor. ✅")
         entities.append(LPGDetailsSensor(coordinator))
-    
+
+    # --- Plan / rates / discounts (from billing/plans, per supply point) ---
+    if billing_plans_data and isinstance(billing_plans_data.get("billingAccountSites"), list):
+        for site in billing_plans_data["billingAccountSites"]:
+            if not isinstance(site.get("supplyPoints"), list):
+                continue
+            for sp in site["supplyPoints"]:
+                if not isinstance(sp, dict) or not sp.get("id"):
+                    continue
+                supply_type = sp.get("supplyType") or "supply"
+                supply_display = sp.get("supplyTypeDisplay") or supply_type.capitalize()
+                sp_id = sp["id"]
+
+                entities.append(GenesisPlanSensor(coordinator, sp_id, supply_type, supply_display))
+
+                plan_term = sp.get("planTerm") or {}
+                if not plan_term.get("hide") and plan_term.get("endDate"):
+                    entities.append(GenesisPlanTermEndSensor(coordinator, sp_id, supply_type, supply_display))
+
+                # Strip the "<plan> <profile> " prefix from tariff names for a clean label.
+                prefix = f"{sp.get('plan', '')} {sp.get('planProfile', '')} ".strip() + " "
+                for tariff in sp.get("tariffs", []):
+                    if not isinstance(tariff, dict) or not tariff.get("name"):
+                        continue
+                    label = tariff["name"]
+                    if prefix.strip() and label.startswith(prefix):
+                        label = label[len(prefix):]
+                    entities.append(GenesisRateSensor(coordinator, sp_id, supply_type, supply_display, tariff["name"], label, tariff.get("unit", "kWh")))
+
+                for discount in sp.get("appliedDiscounts", []):
+                    if not isinstance(discount, dict) or not discount.get("name"):
+                        continue
+                    entities.append(GenesisDiscountSensor(coordinator, sp_id, supply_type, supply_display, discount["name"]))
+        LOGGER.info("Billing plan data found. Adding plan/rate/discount sensors. ✅")
+
+    # --- Bill balance / overdue / due date (from billing/summary) ---
+    if coordinator.data.get(DATA_API_BILLING_SUMMARY):
+        LOGGER.info("Billing summary data found. Adding bill sensors. ✅")
+        entities.extend([
+            BillBalanceSensor(coordinator),
+            BillOverdueSensor(coordinator),
+            BillDueDateSensor(coordinator),
+            BillDueDaysSensor(coordinator),
+        ])
+    else:
+        LOGGER.info("Billing summary data not found. Skipping bill sensors. ❌")
+
     async_add_entities(entities)
 
 class LPGDetailsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
@@ -843,3 +908,211 @@ class GenesisEnergyAccountSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordi
 
         LOGGER.debug("[Account Sensor] Final attributes before serialization: %s", attrs.keys())
         return attrs
+
+
+class GenesisPlanBaseSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
+    """Base for per-supply-point plan/rate/discount sensors from billing/plans."""
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, supply_point_id: str, key: str, name: str, icon: str | None = None):
+        super().__init__(coordinator)
+        self._sp_id = supply_point_id
+        self.entity_description = SensorEntityDescription(key=key, name=name, icon=icon)
+        self._attr_device_info = coordinator.device_info
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{key}"
+
+    def _find(self) -> tuple[dict | None, dict | None]:
+        """Return (site, supply_point) for this sensor's supply point, or (None, None)."""
+        data = self.coordinator.data.get(DATA_API_BILLING_PLANS) if self.coordinator.data else None
+        if not data:
+            return None, None
+        for site in data.get("billingAccountSites", []):
+            if not isinstance(site, dict):
+                continue
+            for sp in site.get("supplyPoints", []) or []:
+                if isinstance(sp, dict) and sp.get("id") == self._sp_id:
+                    return site, sp
+        return None, None
+
+    @property
+    def _supply_point(self) -> dict | None:
+        return self._find()[1]
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._supply_point is not None
+
+
+class GenesisPlanSensor(GenesisPlanBaseSensor):
+    _attr_icon = "mdi:file-document-outline"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, sp_id: str, supply_type: str, supply_display: str):
+        super().__init__(coordinator, sp_id, f"{SENSOR_KEY_PREFIX_PLAN}_{supply_type}", f"{supply_display} Plan")
+
+    @property
+    def native_value(self) -> str | None:
+        if not (sp := self._supply_point):
+            return None
+        plan, profile = sp.get("plan"), sp.get("planProfile")
+        if plan and profile:
+            return f"{plan} ({profile})"
+        return plan or sp.get("planDisplay")
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        site, sp = self._find()
+        if not sp:
+            return None
+        term = sp.get("planTerm") or {}
+        return {
+            "address": site.get("address") if site else None,
+            "supply_type": sp.get("supplyTypeDisplay"),
+            "plan_profile": sp.get("planProfile"),
+            "plan_display": sp.get("planDisplay"),
+            "term_type": term.get("type"),
+            "term_end_date": term.get("endDate"),
+        }
+
+
+class GenesisPlanTermEndSensor(GenesisPlanBaseSensor):
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_icon = "mdi:calendar-end"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, sp_id: str, supply_type: str, supply_display: str):
+        super().__init__(coordinator, sp_id, f"{SENSOR_KEY_PREFIX_PLAN_TERM_END}_{supply_type}", f"{supply_display} Plan Term End")
+
+    @property
+    def native_value(self) -> date | None:
+        if not (sp := self._supply_point):
+            return None
+        return _parse_genesis_date((sp.get("planTerm") or {}).get("endDate"))
+
+
+class GenesisRateSensor(GenesisPlanBaseSensor):
+    _attr_icon = "mdi:cash"
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, sp_id: str, supply_type: str, supply_display: str, tariff_name: str, label: str, unit: str):
+        key = f"{SENSOR_KEY_PREFIX_RATE}_{supply_type}_{_slug(label)}"
+        super().__init__(coordinator, sp_id, key, f"{supply_display} {label} Rate")
+        self._tariff_name = tariff_name
+        self._attr_native_unit_of_measurement = f"NZD/{unit}"
+
+    @property
+    def native_value(self) -> float | None:
+        if not (sp := self._supply_point):
+            return None
+        for tariff in sp.get("tariffs", []):
+            if isinstance(tariff, dict) and tariff.get("name") == self._tariff_name:
+                return tariff.get("value")
+        return None
+
+
+class GenesisDiscountSensor(GenesisPlanBaseSensor):
+    _attr_icon = "mdi:sale"
+    _attr_native_unit_of_measurement = "%"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, sp_id: str, supply_type: str, supply_display: str, discount_name: str):
+        key = f"{SENSOR_KEY_PREFIX_DISCOUNT}_{supply_type}_{_slug(discount_name)}"
+        super().__init__(coordinator, sp_id, key, f"{supply_display} {discount_name} Discount")
+        self._discount_name = discount_name
+
+    @property
+    def native_value(self) -> float | None:
+        if not (sp := self._supply_point):
+            return None
+        for discount in sp.get("appliedDiscounts", []):
+            if isinstance(discount, dict) and discount.get("name") == self._discount_name:
+                return discount.get("value")
+        return None
+
+
+class GenesisBillSummarySensor(CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], SensorEntity):
+    """Base for sensors backed by billing/summary.
+
+    Only specific numeric/date fields are exposed. The raw response also contains a
+    masked saved card and card-holder name — these are never surfaced.
+    """
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator, key: str, name: str, icon: str | None = None):
+        super().__init__(coordinator)
+        self.entity_description = SensorEntityDescription(key=key, name=name, icon=icon)
+        self._attr_device_info = coordinator.device_info
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{key}"
+
+    @property
+    def _summary(self) -> dict | None:
+        return self.coordinator.data.get(DATA_API_BILLING_SUMMARY) if self.coordinator.data else None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._summary is not None
+
+
+class BillBalanceSensor(GenesisBillSummarySensor):
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "NZD"
+    _attr_icon = "mdi:cash"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
+        super().__init__(coordinator, SENSOR_KEY_BILL_BALANCE, "Bill Balance")
+
+    @property
+    def native_value(self) -> float | None:
+        if summary := self._summary:
+            return summary.get("balance")
+        return None
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        if summary := self._summary:
+            return {
+                "amount_total": summary.get("amountTotal"),
+                "last_payment_date": summary.get("lastPaymentDate"),
+                "last_payment_method": summary.get("lastPaymentMethod"),
+            }
+        return None
+
+
+class BillOverdueSensor(GenesisBillSummarySensor):
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "NZD"
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
+        super().__init__(coordinator, SENSOR_KEY_BILL_OVERDUE, "Bill Amount Overdue")
+
+    @property
+    def native_value(self) -> float | None:
+        if summary := self._summary:
+            return summary.get("amountOverdue")
+        return None
+
+
+class BillDueDateSensor(GenesisBillSummarySensor):
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_icon = "mdi:calendar-alert"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
+        super().__init__(coordinator, SENSOR_KEY_BILL_DUE_DATE, "Bill Due Date")
+
+    @property
+    def native_value(self) -> date | None:
+        if summary := self._summary:
+            return _parse_genesis_date(summary.get("dueDate"))
+        return None
+
+
+class BillDueDaysSensor(GenesisBillSummarySensor):
+    _attr_native_unit_of_measurement = "d"
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator: GenesisEnergyDataUpdateCoordinator):
+        super().__init__(coordinator, SENSOR_KEY_BILL_DUE_DAYS, "Bill Due In")
+
+    @property
+    def native_value(self) -> int | None:
+        if summary := self._summary:
+            return summary.get("dueDays")
+        return None

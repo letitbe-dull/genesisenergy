@@ -3,13 +3,20 @@
 import asyncio
 import voluptuous as vol
 from zoneinfo import ZoneInfo
-from datetime import timedelta 
+from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.persistent_notification import async_create
+from homeassistant.components.http import StaticPathConfig
+import homeassistant.components.lovelace as lovelace_component
+
+_WWW_PATH_REGISTERED: bool = False
+_CARD_FILENAME = "powershout-card.js"
 
 from .const import (
     DOMAIN, PLATFORMS, LOGGER, CONF_EMAIL,
@@ -43,6 +50,45 @@ SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
     vol.Required(ATTR_FUEL_TYPE): vol.In(["electricity", "gas", "both"]),
 })
 
+async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
+    """Register the Power Shout card as a Lovelace resource (storage mode only)."""
+    www_path = Path(__file__).parent / "www"
+    card_path = www_path / _CARD_FILENAME
+    if not card_path.is_file():
+        LOGGER.warning("Card file not found, skipping Lovelace resource registration: %s", card_path)
+        return
+
+    mtime = int(card_path.stat().st_mtime)
+    url = f"/{DOMAIN}/{_CARD_FILENAME}?v={mtime}"
+
+    # hass.data["lovelace"] is a dataclass in modern HA, not a dict
+    lovelace_data = hass.data.get(lovelace_component.DOMAIN)
+    if lovelace_data is None:
+        LOGGER.warning("Lovelace not in hass.data — add card resource manually: %s", url)
+        return
+    resources = getattr(lovelace_data, "resources", None)
+    if resources is None:
+        LOGGER.info("Lovelace resources not available — add card resource manually: %s", url)
+        return
+
+    try:
+        items = resources.async_items()
+        for item in items:
+            item_url = item.get("url", "")
+            if _CARD_FILENAME in item_url:
+                if item_url != url:
+                    # Mtime changed — update the cached-bust URL
+                    await resources.async_update_item(item["id"], {"res_type": "module", "url": url})
+                    LOGGER.info("Updated Lovelace resource: %s", url)
+                return
+        await resources.async_create_item({"res_type": "module", "url": url})
+        LOGGER.info("Registered Lovelace resource: %s", url)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning(
+            "Could not register Lovelace resource (%s). Add manually: %s", exc, url
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genesis Energy from a config entry."""
     LOGGER.info(f"Setting up Genesis Energy for entry: {entry.title}...")
@@ -63,6 +109,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info("Setting up platforms...")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     LOGGER.info("Setting up platforms...✅")
+
+    # ── Lovelace card: serve www/ and register the resource ──────────────────
+    global _WWW_PATH_REGISTERED
+    if not _WWW_PATH_REGISTERED:
+        www_path = Path(__file__).parent / "www"
+        if www_path.is_dir():
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(f"/{DOMAIN}", str(www_path), cache_headers=False)]
+            )
+            LOGGER.info("Registered static path /%s → %s", DOMAIN, www_path)
+        _WWW_PATH_REGISTERED = True
+
+    @callback
+    def _schedule_card_registration(_event=None) -> None:
+        hass.async_create_task(_async_register_lovelace_card(hass))
+
+    if hass.is_running:
+        _schedule_card_registration()
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _schedule_card_registration)
+    # ─────────────────────────────────────────────────────────────────────────
 
 
     def get_available_services(coordinator: GenesisEnergyDataUpdateCoordinator) -> tuple[bool, bool]:

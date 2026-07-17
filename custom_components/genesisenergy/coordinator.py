@@ -25,7 +25,7 @@ from .const import (
     DATA_API_WIDGET_ECO_TRACKER, DATA_API_WIDGET_DASHBOARD_LIST,
     DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION,
     DATA_API_GENERATION_MIX, DATA_API_EV_PLAN_USAGE, DATA_API_ELECTRICITY_FORECAST,
-    DATA_API_USAGE_BREAKDOWN, DATA_API_LPG_DETAILS,
+    DATA_API_USAGE_BREAKDOWN, DATA_API_BILLING_SUMMARY, DATA_API_LPG_DETAILS,
     CONF_ACCESS_TOKEN, CONF_ACCESS_TOKEN_EXPIRY, CONF_REFRESH_TOKEN, CONF_REFRESH_TOKEN_EXPIRY
 )
 
@@ -89,6 +89,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         
         api_calls = {
             DATA_API_BILLING_PLANS: self.api.get_billing_plans(),
+            DATA_API_BILLING_SUMMARY: self.api.get_billing_summary(),
             DATA_API_ELECTRICITY_USAGE: self.api.get_energy_data(days_for_regular_fetch),
             DATA_API_EV_PLAN_USAGE: self.api.get_ev_plan_usage(),
             DATA_API_GAS_USAGE: self.api.get_gas_data(days_for_regular_fetch),

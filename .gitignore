@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .ruff_cache/
-.venv/
-
-
+venv/
+.assets/
+.docs/
 CLAUDE.md
