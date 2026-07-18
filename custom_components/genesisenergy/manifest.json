@@ -3,7 +3,11 @@
   "name": "Genesis Energy",
   "codeowners": ["@letitbe-dull"],
   "config_flow": true,
+  "after_dependencies": [
+    "lovelace"
+  ],
   "dependencies": [
+    "http",
     "recorder"
   ],
   "documentation": "https://github.com/letitbe-dull/genesisenergy",
