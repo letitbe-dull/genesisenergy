@@ -1,11 +1,11 @@
 {
   "domain": "genesisenergy",
   "name": "Genesis Energy",
-  "codeowners": ["@letitbe-dull"],
-  "config_flow": true,
   "after_dependencies": [
     "lovelace"
   ],
+  "codeowners": ["@letitbe-dull"],
+  "config_flow": true,
   "dependencies": [
     "http",
     "recorder"
