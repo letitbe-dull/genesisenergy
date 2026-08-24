@@ -10,7 +10,7 @@ from urllib.parse import parse_qs
 import socket
 import asyncio
 
-from .exceptions import CannotConnect, InvalidAuth
+from .exceptions import ApiError, CannotConnect, InvalidAuth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -330,7 +330,60 @@ class GenesisEnergyApi:
                     self._access_token_absolute_expiry_ts = 0
                     raise CannotConnect(f"Unauthorized (401) for {description}; token cleared, will re-login")
                 else:
-                    raise CannotConnect(f"API error for {description}: {response.status} - {await response.text()}")
+                    response_text = await response.text()
+                    response_data: object = response_text
+                    try:
+                        response_data = json.loads(response_text) if response_text else {}
+                    except json.JSONDecodeError:
+                        pass
+                    error_type = None
+                    error_message = None
+                    if isinstance(response_data, dict):
+                        error_data = response_data.get("error")
+                        problem = (
+                            error_data
+                            if isinstance(error_data, dict)
+                            else response_data
+                        )
+                        error_type = problem.get("type")
+                        # Genesis puts the useful text in "detail"; the other
+                        # keys are only present on a few endpoints.
+                        error_message = (
+                            problem.get("detail")
+                            or problem.get("title")
+                            or problem.get("message")
+                            or problem.get("description")
+                        )
+                    # Genesis often answers 4xx/5xx with an untyped body, so log
+                    # what it actually said — the exception message alone is not
+                    # enough to tell a rejected payload from a server fault.
+                    # Noisy 4xx on GETs just means the account lacks that
+                    # product. A failed POST is always a deliberate action.
+                    noisy = method.upper() == "GET" and response.status < 500
+                    log = _LOGGER.debug if noisy else _LOGGER.warning
+                    log(
+                        "Genesis %s %s failed for %s: HTTP %s — body: %s",
+                        method.upper(),
+                        endpoint,
+                        description,
+                        response.status,
+                        response_text[:800] if response_text else "<empty>",
+                    )
+                    if json_payload is not None:
+                        # Payloads carry account identifiers, so keep them out of
+                        # logs users share.
+                        _LOGGER.debug(
+                            "Payload sent to %s: %s", endpoint, json_payload
+                        )
+                    fallback = f"Genesis returned HTTP {response.status} for {description}"
+                    if not error_message and response_text:
+                        fallback = f"{fallback}: {response_text[:300]}"
+                    raise ApiError(
+                        error_message or fallback,
+                        status=response.status,
+                        error_type=error_type,
+                        response_data=response_data,
+                    )
         except aiohttp.ClientError as e:
             raise CannotConnect(f"HTTP client error for {description}: {e}") from e
         except json.JSONDecodeError as e:
@@ -371,6 +424,43 @@ class GenesisEnergyApi:
     async def get_powershout_bookings(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/bookings", description="Power Shout bookings")
     async def get_powershout_offers(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/offers", description="Power Shout offers")
     async def get_powershout_expiring_hours(self): return await self._make_api_call("GET", "/v2/private/powershoutcurrency/expiringHours", description="Power Shout expiring")
+
+    async def get_initialize_metadata(self) -> Any:
+        """Get account metadata and release toggles."""
+        return await self._make_api_call(
+            "GET",
+            "/v2/private/drd/initialize",
+            description="account metadata",
+        )
+
+    async def get_powershout_setup(self) -> Any:
+        """Get retrospective Power Shout setup."""
+        return await self._make_api_call(
+            "GET",
+            "/v2/private/powershout/setup",
+            description="Power Shout retrospective setup",
+        )
+
+    async def get_powershout_recommended_hours(
+        self,
+        account_id: str,
+        billing_account_id: str,
+        icp_number: str,
+        supply_agreement_id: str,
+    ) -> Any:
+        """Get Genesis-ranked retrospective Power Shout hours."""
+        params = {
+            "accountId": account_id,
+            "billingAccountId": billing_account_id,
+            "icpNumber": icp_number,
+            "supplyAgreementId": supply_agreement_id,
+        }
+        return await self._make_api_call(
+            "GET",
+            "/v2/private/powershout/recommendedHours",
+            params=params,
+            description="Power Shout recommended hours",
+        )
 
     async def get_powershout_vouchers_for_date(self, selected_date_str: str, supply_point_id: str):
         """Gets available Power Shout vouchers for a specific date."""
@@ -413,6 +503,24 @@ class GenesisEnergyApi:
             expect_json=False,
         )
     
+    async def delete_powershout_booking(
+        self,
+        booking_id: str,
+        billing_account_id: str,
+    ) -> Any:
+        """Cancels an upcoming Power Shout booking."""
+        payload = {
+            "bookingId": booking_id,
+            "billingAccountId": billing_account_id,
+        }
+        return await self._make_api_call(
+            "POST",
+            "/v2/private/powershoutcurrency/booking/delete",
+            json_payload=payload,
+            description="delete Power Shout booking",
+            expect_json=False,
+        )
+
     async def accept_powershout_offer(
         self,
         loyalty_account_id: str,

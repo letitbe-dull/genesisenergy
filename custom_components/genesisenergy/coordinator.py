@@ -1,12 +1,14 @@
 # custom_components/genesisenergy/coordinator.py
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import asyncio
-from typing import TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.components.recorder import get_instance
@@ -26,14 +28,18 @@ from .const import (
     DATA_API_WIDGET_ACTION_TILE_LIST, DATA_API_NEXT_BEST_ACTION,
     DATA_API_GENERATION_MIX, DATA_API_EV_PLAN_USAGE, DATA_API_ELECTRICITY_FORECAST,
     DATA_API_USAGE_BREAKDOWN, DATA_API_BILLING_SUMMARY, DATA_API_LPG_DETAILS,
+    DATA_API_METADATA, DATA_POWERSHOUT_REDEMPTION_STATES,
+    RANKED_HOUR_LIMIT, REDEEMED_STORE_VERSION, REDEEMED_KEEP_DAYS,
     CONF_ACCESS_TOKEN, CONF_ACCESS_TOKEN_EXPIRY, CONF_REFRESH_TOKEN, CONF_REFRESH_TOKEN_EXPIRY
 )
+from .powershout import NZ_TIME_ZONE, PowerShoutRedemption, build_ranked_hours
+from .hourly_costs import HourlyCostSource
 
 if TYPE_CHECKING:
     from .sensor import GenesisEnergyStatisticsSensor
 
 
-class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
+class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     config_entry: ConfigEntry
     api: GenesisEnergyApi
     device_info: DeviceInfo
@@ -54,6 +60,14 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             token_state=token_state,
             token_update_cb=self._persist_token_state,
         )
+        self.powershout = PowerShoutRedemption(self.api)
+        self.hour_costs = HourlyCostSource(hass, self.api)
+        # Genesis omits retrospective redemptions from its bookings list and keeps
+        # recommending them, so remember what was redeemed here.
+        self._redeemed_store: Store = Store(
+            hass, REDEEMED_STORE_VERSION, f"{DOMAIN}_redeemed_hours_{entry.entry_id}"
+        )
+        self._redeemed_hours: set[str] | None = None
         device_name = self.config_entry.title
         self.device_info = DeviceInfo(identifiers={(DOMAIN, self.config_entry.entry_id)}, name=device_name, manufacturer=DEVICE_MANUFACTURER, model=f"{DEVICE_MODEL} (Polls every {DEFAULT_SCAN_INTERVAL_HOURS}h)", configuration_url="https://myaccount.genesisenergy.co.nz/")
         self.statistics_sensors: list["GenesisEnergyStatisticsSensor"] = []
@@ -70,7 +84,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         }
         self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
 
-    async def _async_update_data(self) -> dict[str, any]:
+    async def _async_update_data(self) -> dict[str, Any]:
         try:
             # Authenticate up front (outside the per-call gather, which swallows errors)
             # so a credential failure can trigger HA's reauth flow.
@@ -83,7 +97,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         except Exception as err:
             raise UpdateFailed(f"Unexpected error updating data: {err}") from err
 
-    async def _async_fetch_all_data(self) -> dict[str, any]:
+    async def _async_fetch_all_data(self) -> dict[str, Any]:
         """Fetch all data from the API in parallel."""
         days_for_regular_fetch = 4
         
@@ -98,6 +112,7 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
             DATA_API_POWERSHOUT_BOOKINGS: self.api.get_powershout_bookings(),
             DATA_API_POWERSHOUT_OFFERS: self.api.get_powershout_offers(),
             DATA_API_POWERSHOUT_EXPIRING: self.api.get_powershout_expiring_hours(),
+            DATA_API_METADATA: self.api.get_initialize_metadata(),
             DATA_API_WIDGET_HERO: self.api.get_widget_hero_info(),
             DATA_API_WIDGET_BILLS: self.api.get_widget_bill_summary(),
             DATA_API_WIDGET_PROPERTY_LIST: self.api.get_widget_property_list(),
@@ -159,8 +174,121 @@ class GenesisEnergyDataUpdateCoordinator(DataUpdateCoordinator[dict[str, any]]):
         else:
             LOGGER.debug("No LPG details to process (likely no LPG on account).")
 
+        try:
+            fetched_data[DATA_POWERSHOUT_REDEMPTION_STATES] = (
+                await self.powershout.async_load_states(
+                    fetched_data.get(DATA_API_METADATA),
+                    fetched_data.get(DATA_API_POWERSHOUT_INFO),
+                )
+            )
+        except Exception as err:
+            LOGGER.warning("Could not load retrospective Power Shout data: %s", err)
+            fetched_data[DATA_POWERSHOUT_REDEMPTION_STATES] = {}
+
+        try:
+            fetched_data[DATA_POWERSHOUT_REDEMPTION_STATES] = await self._async_rank_past_hours(
+                fetched_data.get(DATA_POWERSHOUT_REDEMPTION_STATES) or {},
+                fetched_data.get(DATA_API_POWERSHOUT_BOOKINGS),
+            )
+        except Exception as err:
+            LOGGER.warning("Could not rank past Power Shout hours: %s", err)
 
         return fetched_data
+
+    async def _async_redeemed_hours(self) -> set[str]:
+        """Return past hours redeemed through this integration."""
+        if self._redeemed_hours is None:
+            stored = await self._redeemed_store.async_load()
+            hours = stored.get("hours") if isinstance(stored, dict) else None
+            self._redeemed_hours = set(hours) if isinstance(hours, list) else set()
+        return self._redeemed_hours
+
+    async def async_record_redeemed(self, starts: Iterable[str]) -> None:
+        """Record redeemed past hours so they leave the ranked list immediately."""
+        hours = await self._async_redeemed_hours()
+        added = {str(value) for value in starts if value}
+        if added <= hours:
+            return
+        hours |= added
+        cutoff = (
+            datetime.now(NZ_TIME_ZONE).date() - timedelta(days=REDEEMED_KEEP_DAYS)
+        ).isoformat()
+        self._redeemed_hours = {value for value in hours if value[:10] >= cutoff}
+        await self._redeemed_store.async_save(
+            {"hours": sorted(self._redeemed_hours)}
+        )
+
+    def _booked_hour_starts(self, bookings_data: Any) -> frozenset[str]:
+        """Return local hours already covered by a Power Shout booking."""
+        if not isinstance(bookings_data, dict):
+            return frozenset()
+        bookings = bookings_data.get("bookings")
+        if not isinstance(bookings, list):
+            return frozenset()
+
+        starts: set[str] = set()
+        for booking in bookings:
+            if not isinstance(booking, dict) or not booking.get("startDateTime"):
+                continue
+            try:
+                start = datetime.fromisoformat(str(booking["startDateTime"]))
+            except (TypeError, ValueError):
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=NZ_TIME_ZONE)
+            start = start.astimezone(NZ_TIME_ZONE).replace(
+                minute=0, second=0, microsecond=0, tzinfo=None
+            )
+            try:
+                duration = max(1, int(float(booking.get("duration") or 1)))
+            except (TypeError, ValueError):
+                duration = 1
+            for offset in range(duration):
+                starts.add(
+                    (start + timedelta(hours=offset)).strftime("%Y-%m-%dT%H:%M:%S")
+                )
+        return frozenset(starts)
+
+    async def _async_rank_past_hours(
+        self, states: dict[str, Any], bookings_data: Any
+    ) -> dict[str, Any]:
+        """Attach cost-ranked eligible hours to each retrospective property state."""
+        # Ranking runs off local statistics, so it still works when Genesis'
+        # own recommendation call is down.
+        windows = {
+            state.past_days
+            for state in states.values()
+            if getattr(state, "past_days", 0) > 0
+        }
+        if not windows:
+            return states
+
+        today = datetime.now(NZ_TIME_ZONE).date()
+        latest = today - timedelta(days=1)
+        earliest = today - timedelta(days=max(windows))
+        hours = await self.hour_costs.async_hour_costs(earliest, latest)
+        if not hours:
+            return states
+
+        booked = self._booked_hour_starts(bookings_data) | await self._async_redeemed_hours()
+        ranked_states: dict[str, Any] = {}
+        for site_key, state in states.items():
+            if getattr(state, "past_days", 0) <= 0:
+                ranked_states[site_key] = state
+                continue
+            site_earliest = (today - timedelta(days=state.past_days)).strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
+            in_window = {
+                key: value for key, value in hours.items() if key >= site_earliest
+            }
+            ranked_states[site_key] = replace(
+                state,
+                ranked_hours=build_ranked_hours(
+                    in_window, state.recommendations, booked, RANKED_HOUR_LIMIT
+                ),
+            )
+        return ranked_states
 
     async def async_backfill_statistics_data(self, days_to_fetch: int, fuel_type: str, force_overwrite: bool = False) -> None:
         """

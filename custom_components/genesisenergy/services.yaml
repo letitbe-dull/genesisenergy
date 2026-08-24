@@ -23,6 +23,59 @@ add_powershout_booking:
           step: 1
           mode: slider
           unit_of_measurement: "hr"
+    site_key:
+      name: Property key
+      description: "Targets one electricity property. Required when the account has more than one eligible property."
+      required: false
+      selector:
+        text: {}
+    config_entry_id:
+      name: Genesis account key
+      description: "Routes the booking to a specific configured Genesis account. The Power Shout card supplies this automatically."
+      required: false
+      selector:
+        text: {}
+
+redeem_powershout:
+  name: Redeem Past Power Shout
+  description: >
+    Applies one or more eligible past Power Shout hours to the selected property's
+    next bill. Past redemptions cannot be changed or cancelled.
+  target:
+    entity:
+      domain: binary_sensor
+      integration: genesisenergy
+  fields:
+    recommendation_keys:
+      name: Highest-savings recommendations
+      description: >
+        One or more opaque keys from the target entity's recommendations attribute.
+        Each recommendation is redeemed separately so partial results can be returned.
+      required: false
+      example:
+        - "798d91e51391f52d"
+        - "464f8c5fe9f9fa7d"
+      selector:
+        object: {}
+    start_datetime:
+      name: Past hour start
+      description: >
+        One local past-hour start inside Genesis' eligible date window, or a list of
+        them to redeem several at once. Do not combine this with recommendation keys.
+      required: false
+      selector:
+        datetime: {}
+    duration_hours:
+      name: Duration
+      description: "Duration for a manual past start. Recommended hours always use one hour."
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: slider
+          unit_of_measurement: "hr"
 
 accept_powershout_offer:
   name: Accept Power Shout Offer
@@ -33,6 +86,32 @@ accept_powershout_offer:
       description: "The GUID of the Power Shout offer to accept (e.g. from the 'active_offers' attribute of the Power Shout Balance sensor)."
       required: true
       example: "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+      selector:
+        text: {}
+
+cancel_powershout_booking:
+  name: Cancel Power Shout Booking
+  description: >
+    Cancels an upcoming Power Shout booking and returns its hours to your balance.
+    Past redemptions cannot be cancelled.
+  fields:
+    booking_id:
+      name: Booking
+      description: "The booking's id, from the 'bookings' attribute of the Power Shout Balance sensor."
+      required: true
+      example: "1234567"
+      selector:
+        text: {}
+    site_key:
+      name: Property key
+      description: "Targets one electricity property. Required when the account has more than one eligible property."
+      required: false
+      selector:
+        text: {}
+    config_entry_id:
+      name: Genesis account key
+      description: "Routes the cancellation to a specific configured Genesis account. The Power Shout card supplies this automatically."
+      required: false
       selector:
         text: {}
 
