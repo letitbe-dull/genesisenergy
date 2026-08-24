@@ -30,6 +30,16 @@ DATA_API_POWERSHOUT_BALANCE: Final = "api_powershout_balance"
 DATA_API_POWERSHOUT_BOOKINGS: Final = "api_powershout_bookings"
 DATA_API_POWERSHOUT_OFFERS: Final = "api_powershout_offers"
 DATA_API_POWERSHOUT_EXPIRING: Final = "api_powershout_expiring"
+DATA_API_METADATA: Final = "api_metadata"
+DATA_POWERSHOUT_REDEMPTION_STATES: Final = "powershout_redemption_states"
+DATA_POWERSHOUT_HOUR_COSTS: Final = "powershout_hour_costs"
+
+# How many cost-ranked past hours to publish on the recommendation sensor.
+RANKED_HOUR_LIMIT: Final = 10
+
+# Local record of redeemed past hours; Genesis does not report them back.
+REDEEMED_STORE_VERSION: Final = 1
+REDEEMED_KEEP_DAYS: Final = 60
 DATA_API_BILLING_PLANS: Final = "api_billing_plans"
 DATA_API_WIDGET_HERO: Final = "api_widget_hero"
 DATA_API_WIDGET_BILLS: Final = "api_widget_bill_summary"
@@ -117,10 +127,16 @@ DEVICE_MODEL: Final = "Online Account"
 
 # --- Service Related Constants ---
 SERVICE_ADD_POWERSHOUT_BOOKING: Final = "add_powershout_booking"
+SERVICE_REDEEM_POWERSHOUT: Final = "redeem_powershout"
 SERVICE_ACCEPT_POWERSHOUT_OFFER: Final = "accept_powershout_offer"
+SERVICE_CANCEL_POWERSHOUT_BOOKING: Final = "cancel_powershout_booking"
 ATTR_START_DATETIME: Final = "start_datetime"
+ATTR_RECOMMENDATION_KEYS: Final = "recommendation_keys"
 ATTR_DURATION_HOURS: Final = "duration_hours"
 ATTR_OFFER_ID: Final = "offer_id"
+ATTR_SITE_KEY: Final = "site_key"
+ATTR_CONFIG_ENTRY_ID: Final = "config_entry_id"
+ATTR_BOOKING_ID: Final = "booking_id"
 
 SERVICE_BACKFILL_STATISTICS: Final = "backfill_statistics"
 ATTR_DAYS_TO_FETCH: Final = "days_to_fetch"

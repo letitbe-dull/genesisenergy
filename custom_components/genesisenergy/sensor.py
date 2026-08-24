@@ -250,6 +250,39 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             return "no_data"
         return "error"
 
+    @property
+    def _latest_reading(self) -> datetime | None:
+        """Return the most recent interval Genesis has delivered."""
+        if not self.coordinator.data:
+            return None
+        api_data = self.coordinator.data.get(self._data_key)
+        entries = api_data.get("usage") if isinstance(api_data, dict) else None
+        if not isinstance(entries, list):
+            return None
+        latest: datetime | None = None
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("startDate"):
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(entry["startDate"]))
+            except (TypeError, ValueError):
+                continue
+            if latest is None or parsed > latest:
+                latest = parsed
+        return latest
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        """Expose how current the delivered usage data is."""
+        latest = self._latest_reading
+        if latest is None:
+            return {"latest_reading": None, "days_behind": None}
+        days_behind = (dt_util.now().date() - latest.astimezone(self._utc_tz).date()).days
+        return {
+            "latest_reading": latest.isoformat(),
+            "days_behind": max(0, days_behind),
+        }
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle coordinator updates, triggering a daily overwrite or hourly append."""

@@ -5,3 +5,4 @@ venv/
 .assets/
 .docs/
 CLAUDE.md
+.scratch

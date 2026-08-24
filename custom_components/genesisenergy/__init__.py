@@ -1,43 +1,59 @@
 # custom_components/genesisenergy/__init__.py
 
-import asyncio
-import voluptuous as vol
-from zoneinfo import ZoneInfo
-from datetime import timedelta
+from functools import partial
 from pathlib import Path
+
+import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryNotReady,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.http import StaticPathConfig
 import homeassistant.components.lovelace as lovelace_component
 
-_WWW_PATH_REGISTERED: bool = False
-_CARD_FILENAME = "powershout-card.js"
-
 from .const import (
     DOMAIN, PLATFORMS, LOGGER, CONF_EMAIL,
     SERVICE_ADD_POWERSHOUT_BOOKING, ATTR_START_DATETIME, ATTR_DURATION_HOURS,
-    DATA_API_POWERSHOUT_INFO, DATA_API_POWERSHOUT_OFFERS,
+    DATA_API_POWERSHOUT_OFFERS,
     SERVICE_BACKFILL_STATISTICS, ATTR_DAYS_TO_FETCH, ATTR_FUEL_TYPE,
     SERVICE_FORCE_UPDATE, DATA_API_BILLING_PLANS,
-    SERVICE_ACCEPT_POWERSHOUT_OFFER, ATTR_OFFER_ID
+    SERVICE_ACCEPT_POWERSHOUT_OFFER, ATTR_OFFER_ID, ATTR_SITE_KEY,
+    SERVICE_CANCEL_POWERSHOUT_BOOKING, ATTR_BOOKING_ID,
+    ATTR_CONFIG_ENTRY_ID,
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
-from .exceptions import CannotConnect, InvalidAuth
+from .exceptions import (
+    GenesisEnergyError,
+    PowerShoutValidationError,
+)
+
+_WWW_PATH_REGISTERED: bool = False
+_CARD_FILENAME = "powershout-card.js"
 
 ATTR_FORCE_OVERWRITE = "force_overwrite"
 
 SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING = vol.Schema({
     vol.Required(ATTR_START_DATETIME): cv.datetime,
     vol.Required(ATTR_DURATION_HOURS): vol.All(vol.Coerce(int), vol.Range(min=1, max=4)),
+    vol.Optional(ATTR_SITE_KEY): cv.string,
+    vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
 })
 
 SERVICE_SCHEMA_ACCEPT_POWERSHOUT_OFFER = vol.Schema({
     vol.Required(ATTR_OFFER_ID): cv.string,
+})
+
+SERVICE_SCHEMA_CANCEL_POWERSHOUT_BOOKING = vol.Schema({
+    vol.Required(ATTR_BOOKING_ID): cv.string,
+    vol.Optional(ATTR_SITE_KEY): cv.string,
+    vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
 })
 
 SERVICE_SCHEMA_BACKFILL_STATISTICS = vol.Schema({
@@ -49,6 +65,90 @@ SERVICE_SCHEMA_BACKFILL_STATISTICS = vol.Schema({
 SERVICE_SCHEMA_FORCE_UPDATE = vol.Schema({
     vol.Required(ATTR_FUEL_TYPE): vol.In(["electricity", "gas", "both"]),
 })
+
+
+def _resolve_powershout_coordinator(
+    hass: HomeAssistant,
+    config_entry_id: str | None,
+    site_key: str | None,
+) -> GenesisEnergyDataUpdateCoordinator:
+    """Resolve the coordinator owning a Power Shout property."""
+    coordinators = [
+        value
+        for value in hass.data.get(DOMAIN, {}).values()
+        if isinstance(value, GenesisEnergyDataUpdateCoordinator)
+    ]
+    if config_entry_id:
+        coordinator = hass.data.get(DOMAIN, {}).get(config_entry_id)
+        if isinstance(coordinator, GenesisEnergyDataUpdateCoordinator):
+            return coordinator
+        raise PowerShoutValidationError(
+            "The selected Genesis Energy account is unavailable."
+        )
+    if site_key:
+        matches = [
+            item for item in coordinators if site_key in item.powershout.states
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    if len(coordinators) == 1:
+        return coordinators[0]
+    raise PowerShoutValidationError(
+        "Select a property-specific Genesis Energy account for this Power Shout."
+    )
+
+
+async def _async_cancel_powershout_booking_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> None:
+    """Handle a property-safe cancellation of an upcoming Power Shout."""
+    try:
+        coordinator = _resolve_powershout_coordinator(
+            hass,
+            call.data.get(ATTR_CONFIG_ENTRY_ID),
+            call.data.get(ATTR_SITE_KEY),
+        )
+        await coordinator.powershout.async_cancel_booking(
+            call.data[ATTR_BOOKING_ID],
+            call.data.get(ATTR_SITE_KEY),
+        )
+    except PowerShoutValidationError as err:
+        raise ServiceValidationError(str(err)) from err
+    except GenesisEnergyError as err:
+        raise HomeAssistantError(str(err)) from err
+
+    await coordinator.async_request_refresh()
+
+
+async def _async_add_powershout_booking_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> None:
+    """Handle a property-safe future Power Shout booking."""
+    try:
+        coordinator = _resolve_powershout_coordinator(
+            hass,
+            call.data.get(ATTR_CONFIG_ENTRY_ID),
+            call.data.get(ATTR_SITE_KEY),
+        )
+        result = await coordinator.powershout.async_book_future(
+            call.data[ATTR_START_DATETIME],
+            call.data[ATTR_DURATION_HOURS],
+            call.data.get(ATTR_SITE_KEY),
+        )
+    except PowerShoutValidationError as err:
+        raise ServiceValidationError(str(err)) from err
+    except GenesisEnergyError as err:
+        raise HomeAssistantError(str(err)) from err
+
+    async_create(
+        hass,
+        f"Your {result['duration_hours']}-hour Power Shout starting at "
+        f"{result['start_datetime'].replace('T', ' ')} has been booked.",
+        title="Genesis Energy Power Shout Booked",
+        notification_id="genesis_powershout_success",
+    )
+    await coordinator.async_request_refresh()
+
 
 async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
     """Register the Power Shout card as a Lovelace resource (storage mode only)."""
@@ -149,104 +249,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 has_gas = True
         return has_electricity, has_gas
 
-    @callback
-    async def async_add_powershout_booking_service(call: ServiceCall) -> None:
-        """Handle the service call to add a Power Shout booking."""
-        start_dt_raw = call.data[ATTR_START_DATETIME]
-        requested_duration = call.data[ATTR_DURATION_HOURS]
-
-        base_start_dt = start_dt_raw.replace(minute=0, second=0, microsecond=0)
-        LOGGER.info(f"Attempting to book Power Shout for {requested_duration} hour(s) starting at {base_start_dt}")
-
-        ps_info = coordinator.data.get(DATA_API_POWERSHOUT_INFO)
-
-        supply_agreement_id, supply_point_id, loyalty_account_id = None, None, None
-        try:
-            loyalty_account_id = ps_info.get("loyaltyAccountId")
-            supply_point_data = ps_info["eligibleBillingAccounts"][0]["billingAccountSites"][0]["supplyPoints"][0]
-            supply_agreement_id = supply_point_data.get("supplyAgreementId")
-            supply_point_id = supply_point_data.get("id")
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        if not all([supply_agreement_id, supply_point_id, loyalty_account_id]):
-            LOGGER.error("Could not book Power Shout: Missing required IDs. Please try again after the next update.")
-            async_create(
-                hass, "Could not book Power Shout: Required information is missing.",
-                title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
-            )
-            return
-
-        successful_bookings = 0
-        try:
-            selected_date_for_vouchers = base_start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%dT00:00:00.000Z')
-            voucher_data = await coordinator.api.get_powershout_vouchers_for_date(selected_date_for_vouchers, supply_point_id)
-            
-            available_vouchers = []
-            if voucher_data and isinstance(voucher_data.get("vouchers"), list):
-                available_vouchers = voucher_data["vouchers"]
-            num_existing_bookings = len(voucher_data.get("bookings", [])) if voucher_data else 0
-            
-            for i in range(requested_duration):
-                current_hour_dt = base_start_dt + timedelta(hours=i)
-                start_date_str = current_hour_dt.strftime('%Y-%m-%dT%H:%M:%S')
-
-                voucher_index = num_existing_bookings + i
-                if voucher_index >= len(available_vouchers):
-                    LOGGER.error(f"Not enough vouchers available to book the full duration. "
-                                 f"Booked {successful_bookings} hour(s) successfully.")
-                    break 
-
-                voucher_to_use = [available_vouchers[voucher_index]]
-                LOGGER.debug(f"For hour {i+1}/{requested_duration}, using voucher: {voucher_to_use[0]}")
-
-                eco_hours = [{"hour": current_hour_dt.hour, "ecoFriendly": False}]
-
-                success = await coordinator.api.add_powershout_booking(
-                    start_date_str=start_date_str,
-                    duration=1, 
-                    supply_agreement_id=supply_agreement_id,
-                    supply_point_id=supply_point_id,
-                    loyalty_account_id=loyalty_account_id,
-                    eco_hours=eco_hours,
-                    vouchers=voucher_to_use,
-                )
-
-                if success:
-                    successful_bookings += 1
-                    await asyncio.sleep(1) 
-                else:
-                    LOGGER.error(f"Failed to book hour {i+1} of {requested_duration}. Stopping.")
-                    break
-
-            if successful_bookings > 0:
-                time_str = base_start_dt.strftime('%-I:%M %p')
-                plural_s = "s" if successful_bookings > 1 else ""
-                LOGGER.info(f"Successfully booked {successful_bookings} hour{plural_s} of Power Shout.")
-                async_create(
-                    hass, f"Your {successful_bookings}-hour Power Shout starting at {time_str} has been booked.",
-                    title="Genesis Energy Power Shout Booked", notification_id="genesis_powershout_success"
-                )
-                await coordinator.async_request_refresh()
-            
-            if successful_bookings < requested_duration:
-                 LOGGER.error("Could not complete the full booking request.")
-                 if successful_bookings == 0: 
-                    async_create(
-                        hass, "The Power Shout booking failed. Check logs for details.",
-                        title="Genesis Energy Power Shout Failed", notification_id="genesis_powershout_error"
-                    )
-
-        except (CannotConnect, InvalidAuth) as e:
-            LOGGER.error(f"Failed to book Power Shout due to an API error: {e}")
-        except Exception:
-            LOGGER.exception("An unexpected error occurred while booking Power Shout.")
-    
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING,
-        async_add_powershout_booking_service,
-        schema=SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING,
-    )
+    if not hass.services.has_service(DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_ADD_POWERSHOUT_BOOKING,
+            partial(_async_add_powershout_booking_service, hass),
+            schema=SERVICE_SCHEMA_ADD_POWERSHOUT_BOOKING,
+        )
     
     @callback
     async def async_accept_powershout_offer_service(call: ServiceCall) -> None:
@@ -302,6 +311,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=SERVICE_SCHEMA_ACCEPT_POWERSHOUT_OFFER,
     )
 
+    hass.services.async_register(
+        DOMAIN, SERVICE_CANCEL_POWERSHOUT_BOOKING,
+        partial(_async_cancel_powershout_booking_service, hass),
+        schema=SERVICE_SCHEMA_CANCEL_POWERSHOUT_BOOKING,
+    )
+
     @callback
     async def async_backfill_statistics_service(call: ServiceCall) -> None:
         """Handle the service call to backfill historical statistics."""
@@ -354,8 +369,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     
     def _unload_services():
-        hass.services.async_remove(DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING)
         hass.services.async_remove(DOMAIN, SERVICE_ACCEPT_POWERSHOUT_OFFER)
+        hass.services.async_remove(DOMAIN, SERVICE_CANCEL_POWERSHOUT_BOOKING)
         hass.services.async_remove(DOMAIN, SERVICE_BACKFILL_STATISTICS)
         hass.services.async_remove(DOMAIN, SERVICE_FORCE_UPDATE)
     
@@ -373,6 +388,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if entry.entry_id in hass.data.get(DOMAIN, {}):
             await hass.data[DOMAIN][entry.entry_id].api.close()
             hass.data[DOMAIN].pop(entry.entry_id)
+        coordinators = [
+            value
+            for value in hass.data.get(DOMAIN, {}).values()
+            if isinstance(value, GenesisEnergyDataUpdateCoordinator)
+        ]
+        if not coordinators:
+            hass.services.async_remove(DOMAIN, SERVICE_ADD_POWERSHOUT_BOOKING)
     return unload_ok
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:

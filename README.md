@@ -22,7 +22,7 @@
 Genesis Energy's web portal sits on a quiet pile of good data - hourly consumption, costs, forecasts, Power Shout balances - and none of it ever leaves the portal. This integration goes and fetches it, so you can chart your usage, feed the Energy Dashboard, and build automations around Power Shouts and the greener hours of the grid.
 
 > [!NOTE]
-> This integration is built by **reverse-engineering the Genesis Energy web portal** and is **not officially supported by Genesis**. If they redecorate their website or change an API, this may quietly stop working.
+> This integration is built by **reverse-engineering the Genesis Energy web portal** and is **not officially supported by Genesis**. If they redecorate their website or change an API, this may crap out until I update it.
 
 ## Features
 
@@ -34,41 +34,50 @@ Genesis Energy's web portal sits on a quiet pile of good data - hourly consumpti
 | **Usage Breakdown** | How Genesis reckons you're spending it - Appliances, Electronics, Lighting and Other (kWh). |
 | **Grid Generation** | `Eco-Friendly (%)` for the current hour, with a two-day hourly generation-mix forecast so you can shift the heavy loads to the clean hours. |
 | **EV Plan Sensors** | Day (Peak) and Night (Off-Peak) usage and cost, plus a Savings sensor showing what the EV plan buys you over the standard rate. |
-| **Power Shout** | Eligibility and balance (hours), upcoming bookings, active offers, plus *Booking In Progress* and *Booking Upcoming* binary sensors. |
-| **Power Shout Card** ✨ | A purpose-built Lovelace card - book shouts, accept offers and watch your usage without leaving the dashboard. [See below](#the-power-shout-card). |
+| **Power Shout** | Eligibility, balance, offers and bookings, plus every eligible past hour ranked by the credit it would put back on your bill. |
+| **Power Shout Card** | Book a shout, cancel one, redeem past hours and see where the power went, without leaving the dashboard. [See below](#the-power-shout-card). |
 | **Billing Cycle** | Electricity, Gas and Total used, estimated total bill and estimated future use ($). |
 | **Account Details** | One sensor doing the work of a filing cabinet - billing plans, account IDs and the raw dashboard data, all in its attributes. |
 | **Services** | Book and accept Power Shouts, backfill historical statistics, and force an immediate refresh when you can't wait the hour. |
 
 ## The Power Shout Card
 
-A dedicated Lovelace card that turns your Power Shout balance into something you can actually *use*, not just read. It pulls together the balance, bookings, offers and forecast that would otherwise be scattered across a dozen sensors, and puts a **Book** button front and centre.
+The Power Shout card puts free power at your fingertips. You can now book power shout hours retroactively as well as planning ahead.
 
 <div align="center">
-<img src="./.github/powershout-card-front.webp" alt="Power Shout card - front face" width="25%">
-&nbsp;&nbsp;
-<img src="./.github/powershout-card-back.webp" alt="Power Shout card - back face (usage breakdown)" width="25%">
+<img src="./.github/card-one.webp" alt="Shout tab - duration, booking and what's already booked" width="23%">
+&nbsp;
+<img src="./.github/card-two.webp" alt="Past hours tab - eligible hours ranked by credit returned" width="23%">
+&nbsp;
+<img src="./.github/card-three.webp" alt="Usage tab - last billing period by category" width="23%">
+&nbsp;
+<img src="./.github/card-four.webp" alt="Shout tab with a Power Shout running" width="23%">
 
-<sub><em>Front: balance, live bar, booking and forecast. Back (tap <strong>More usage ↻</strong>): where your power's going.</em></sub>
+<sub><em>Shout · Past hours · Usage · and the bar that turns up while free power's running.</em></sub>
 
 </div>
 
 ### What it does
 
-- **Balance as currency** - your Power Shout hours shown as a balance you *spend*, with your bill balance and due date alongside.
-- **Live "Free power now" bar** - lights up with an animated glow while a shout is actually running, and tells you when it ends.
-- **Book in two taps** - pick a duration (1-4 hrs) and a start time, hit the button. It calls [`add_powershout_booking`](#genesisenergyadd_powershout_booking) for you.
-- **One-tap offers** - when Genesis has an offer going, an *Add to balance* row appears. Accepting is a deliberate tap, never silent.
-- **Today's forecast** - forecast cost with a low/high band, and a **$ ⇄ kWh** toggle. Plus your estimated bill for the period.
-- **Flip for usage** - the back face breaks down where your power's going (Appliances, Electronics, Lighting, Heating, Hot water, Other) and shows your EV plan savings if you're on one.
-- **Light/dark aware** with a mobile fallback (flip is disabled and the back face hidden under ~440px wide).
+- Your balance sits at the top as hours, with the bill balance next to it and a chip that tells you where you stand: up to date, in credit, due, due today, overdue.
+- A **Book from** button and a duration of one to four hours. That's the whole booking flow.
+- Anything you've booked is listed underneath with a **Cancel** next to it. Cancelling works now; it didn't before.
+- **Past hours** ranks eligible hours by what each one gives back, `3.91 kWh · $1.35 back`, worked out from the cost data already in your Home Assistant database. Genesis suggests five and says nothing about their value. This ranks the lot and shows the number.
+- Hours Genesis picked keep a **Genesis pick** badge, so you can see where its opinion differs from your meter's.
+- Tick a few and redeem them together, or open **Any hour…** and choose a date and time yourself, anywhere inside the eligible window.
+- Before anything irreversible, a confirmation names the property, the hours going out and roughly what's coming back. Each hour reports its own success or failure, so a retry only retries what failed.
+- When Genesis has an offer going, an **Add to balance** row appears. Accepting is a deliberate tap.
+- Today's forecast cost with its low/high band and a **$ ⇄ kWh** toggle, plus the estimated bill for the period.
+- **Usage** breaks the last billing period into Appliances, Electronics, Lighting, Heating, Hot Water and Other, and shows your EV plan savings if you're on one.
+- A **Free power now** bar appears while a shout is running and tells you when it ends.
+- Light and dark aware, and it holds together at phone width.
 
 ### Adding it to a dashboard
 
 The card ships **inside the integration** and registers itself as a Lovelace resource automatically - there's nothing to download and no resource URL to paste in.
 
 1. Make sure the integration is installed and configured (see below).
-2. Edit any dashboard → **+ ADD CARD** → search for **Genesis Energy — Power Shout**, or add it by YAML:
+2. Edit any dashboard → **+ ADD CARD** → search for **Genesis Energy - Power Shout**, or add it by YAML:
 
    ```yaml
    type: custom:genesisenergy-powershout-card
@@ -84,6 +93,7 @@ The card finds your entities from the `_power_shout_balance` sensor. If you have
 ```yaml
 type: custom:genesisenergy-powershout-card
 entity_balance: sensor.genesis_energy_2_power_shout_balance
+entity_highest_savings: binary_sensor.genesis_energy_2_power_shout_highest_savings
 ```
 
 Any individual entity can also be overridden with its own key (e.g. `entity_forecast_cost`, `entity_ev_savings`) if your setup is unusual.
@@ -91,7 +101,7 @@ Any individual entity can also be overridden with its own key (e.g. `entity_fore
 </details>
 
 > [!NOTE]
-> If the card doesn't appear after installing, do a hard refresh of your browser (**Ctrl+F5**) to clear the cached Lovelace resources. If HA runs in YAML dashboard mode, the auto-registration is skipped - add `/genesisenergy/powershout-card.js` as a **module** resource manually under **Settings → Dashboards → ⋮ → Resources**.
+> If the card doesn't appear after installing, do a hard refresh of your browser (**Ctrl+F5**) to clear the cached Lovelace resources. Restart Home Assistant too if you've come from an older version - the Python side only reloads on a restart. If HA runs in YAML dashboard mode, the auto-registration is skipped - add `/genesisenergy/powershout-card.js` as a **module** resource manually under **Settings → Dashboards → ⋮ → Resources**.
 
 ## Installation
 
@@ -229,6 +239,35 @@ Books a Power Shout from your automations or scripts.
 |---|---|---|
 | `start_datetime` | **Required.** Start date/time in your local timezone. | `"2025-07-20 19:00:00"` |
 | `duration_hours` | **Required.** Duration in hours (e.g. 1, 2, 3). | `2` |
+| `site_key` | Property key. Required only when one account has multiple eligible electricity properties. | From the `site_key` attribute on the Highest Savings entity. |
+| `config_entry_id` | Configured Genesis account key. The card supplies this automatically for multi-account setups. | From the `config_entry_id` attribute on the Highest Savings entity. |
+
+### `genesisenergy.cancel_powershout_booking`
+
+Cancels a Power Shout you've booked and puts the hours back on your balance. Past redemptions can't be cancelled - only bookings that haven't run yet.
+
+| Field | Description | Example |
+|---|---|---|
+| `booking_id` | **Required.** The booking's `id`, from the `bookings` attribute on the Power Shout Balance sensor. | `"8497bcf5-18b6-4d90-91ce-e8d564136e07"` |
+| `site_key` | Property key. Required only when one account has multiple eligible electricity properties. | From the `site_key` attribute on the Highest Savings entity. |
+| `config_entry_id` | Configured Genesis account key. The card supplies this automatically for multi-account setups. | From the `config_entry_id` attribute on the Highest Savings entity. |
+
+Genesis sometimes answers an error on a cancellation it has already applied, so the integration re-reads the booking list before it reports a failure.
+
+### `genesisenergy.redeem_powershout`
+
+Redeems eligible past Power Shout hours against the targeted **Power Shout Highest Savings** binary sensor. Genesis controls whether the feature is enabled and how many past days are eligible.
+
+| Field | Description | Example |
+|---|---|---|
+| Target | **Required.** The property-specific Highest Savings binary sensor. | `binary_sensor.genesis_energy_power_shout_highest_savings` |
+| `recommendation_keys` | One or more opaque `key` values from the entity's `recommendations` attribute. Do not combine with `start_datetime`. | `["798d91e51391f52d"]` |
+| `start_datetime` | One local past-hour start inside the entity's `earliest_date` and `latest_date` window, or a list of them to redeem several at once. Do not combine with recommendation keys. | `"2026-08-18 18:00:00"` |
+| `duration_hours` | Duration for one manual start. Ranked recommendations are always one hour each. | `1` |
+
+The action returns a result per selected hour, so an automation or card can retry only failures. Successful redemptions credit your next bill, cannot be changed or cancelled, and may take up to two hours to appear in booking history.
+
+The matching binary sensor turns on when Genesis returns at least one redeemable recommendation. Use that state as an optional automation trigger if you want a phone or persistent notification; the integration does not send unsolicited alerts.
 
 ### `genesisenergy.force_update`
 
@@ -260,6 +299,15 @@ logger:
   logs:
     custom_components.genesisenergy: debug
 ```
+
+### Data looks stale
+
+Genesis runs a day or two behind at the best of times, and now and then it stops publishing for days. Before assuming the integration has broken, check the **Electricity Statistics Updater** or **Gas Statistics Updater** sensor:
+
+- `latest_reading` - the most recent interval Genesis has actually handed over
+- `days_behind` - how far back that is from today
+
+If `days_behind` keeps climbing, the portal has stalled and there's nothing here to fetch. Log into [your Genesis account](https://myaccount.genesisenergy.co.nz/) and you'll usually find the same gap. Once they catch up, `genesisenergy.backfill_statistics` will fill in the days you're missing.
 
 ## Contributing
 

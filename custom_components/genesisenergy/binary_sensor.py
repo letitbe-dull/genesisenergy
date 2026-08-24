@@ -1,10 +1,21 @@
 # custom_components/genesisenergy/binary_sensor.py
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
+
+import voluptuous as vol
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+    callback,
+)
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -18,8 +29,18 @@ from .const import (
     LOGGER,
     DATA_API_POWERSHOUT_BALANCE,
     DATA_API_POWERSHOUT_BOOKINGS,
+    DATA_POWERSHOUT_REDEMPTION_STATES,
+    ATTR_DURATION_HOURS,
+    ATTR_RECOMMENDATION_KEYS,
+    ATTR_START_DATETIME,
+    SERVICE_REDEEM_POWERSHOUT,
 )
 from .coordinator import GenesisEnergyDataUpdateCoordinator
+from .exceptions import (
+    GenesisEnergyError,
+    PowerShoutValidationError,
+)
+from .powershout import PowerShoutRedemptionState
 
 UTC = ZoneInfo("UTC")
 
@@ -32,10 +53,14 @@ def _all_bookings(coordinator: GenesisEnergyDataUpdateCoordinator) -> list[dict]
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the binary sensor entities."""
-    coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator: GenesisEnergyDataUpdateCoordinator = hass.data[DOMAIN][
+        config_entry.entry_id
+    ]
 
     entities: list[BinarySensorEntity] = []
 
@@ -47,6 +72,171 @@ async def async_setup_entry(
         entities.append(PowerShoutBookingUpcomingBinarySensor(coordinator))
 
     async_add_entities(entities)
+
+    known_site_keys: set[str] = set()
+
+    @callback
+    def _add_redemption_entities() -> None:
+        """Add property entities discovered after platform setup."""
+        states = coordinator.data.get(DATA_POWERSHOUT_REDEMPTION_STATES) or {}
+        new_states = [
+            state
+            for state in states.values()
+            if isinstance(state, PowerShoutRedemptionState)
+            and state.site.key not in known_site_keys
+        ]
+        new_entities = [
+            PowerShoutHighestSavingsBinarySensor(
+                coordinator,
+                state.site.key,
+                multiple_sites=len(states) > 1,
+            )
+            for state in new_states
+        ]
+        known_site_keys.update(state.site.key for state in new_states)
+        if new_entities:
+            async_add_entities(new_entities)
+
+    _add_redemption_entities()
+    config_entry.async_on_unload(
+        coordinator.async_add_listener(_add_redemption_entities)
+    )
+
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_REDEEM_POWERSHOUT,
+        {
+            vol.Optional(ATTR_RECOMMENDATION_KEYS): [cv.string],
+            vol.Optional(ATTR_START_DATETIME): vol.Any(
+                cv.datetime, vol.All(cv.ensure_list, [cv.datetime])
+            ),
+            vol.Optional(ATTR_DURATION_HOURS, default=1): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=4)
+            ),
+        },
+        _async_redeem_powershout,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+
+async def _async_redeem_powershout(
+    entity: BinarySensorEntity, call: ServiceCall
+) -> ServiceResponse:
+    """Redeem past Power Shout hours through a recommendation entity."""
+    if not isinstance(entity, PowerShoutHighestSavingsBinarySensor):
+        raise ServiceValidationError(
+            "Select a Genesis Power Shout Highest Savings entity."
+        )
+    try:
+        return await entity.async_redeem(
+            call.data.get(ATTR_RECOMMENDATION_KEYS),
+            call.data.get(ATTR_START_DATETIME),
+            call.data[ATTR_DURATION_HOURS],
+        )
+    except PowerShoutValidationError as err:
+        raise ServiceValidationError(str(err)) from err
+    except GenesisEnergyError as err:
+        raise HomeAssistantError(str(err)) from err
+
+
+class PowerShoutHighestSavingsBinarySensor(
+    CoordinatorEntity[GenesisEnergyDataUpdateCoordinator], BinarySensorEntity
+):
+    """Expose Genesis-ranked retrospective Power Shout hours."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:history"
+
+    def __init__(
+        self,
+        coordinator: GenesisEnergyDataUpdateCoordinator,
+        site_key: str,
+        *,
+        multiple_sites: bool,
+    ) -> None:
+        """Initialize the recommendation sensor."""
+        super().__init__(coordinator)
+        self._site_key = site_key
+        state = self._redemption_state
+        address = state.site.address if state else "Power Shout"
+        self._attr_device_info = coordinator.device_info
+        self._attr_name = (
+            f"Power Shout Highest Savings - {address}"
+            if multiple_sites
+            else "Power Shout Highest Savings"
+        )
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_powershout_highest_savings_{site_key}"
+        )
+
+    @property
+    def _redemption_state(self) -> PowerShoutRedemptionState | None:
+        """Return the current property state."""
+        states = self.coordinator.data.get(DATA_POWERSHOUT_REDEMPTION_STATES) or {}
+        state = states.get(self._site_key)
+        return state if isinstance(state, PowerShoutRedemptionState) else None
+
+    @property
+    def available(self) -> bool:
+        """Return whether a property state exists for this site."""
+        # A Genesis error stays readable in the attributes: going unavailable
+        # drops them, which hides the reason and the whole past-hours UI.
+        return super().available and self._redemption_state is not None
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether Genesis has a redeemable recommendation."""
+        state = self._redemption_state
+        return bool(state and state.has_recommendations)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose display-safe recommendation data."""
+        state = self._redemption_state
+        if not state:
+            return None
+        return state.public_attributes(self.coordinator.config_entry.entry_id)
+
+    async def async_redeem(
+        self,
+        recommendation_keys: list[str] | None,
+        manual_start: datetime | list[datetime] | None,
+        duration: int,
+    ) -> dict[str, Any]:
+        """Redeem selected past hours and refresh coordinator state."""
+        result = await self.coordinator.powershout.async_redeem_past(
+            self._site_key,
+            recommendation_keys=recommendation_keys,
+            manual_start=manual_start,
+            duration=duration,
+        )
+        # Genesis does not reliably reject an hour that was already redeemed, so
+        # this only catches the cases where it happens to say so.
+        already = [
+            item
+            for item in result["failed"]
+            if item.get("code") == "duplicate_booking"
+        ]
+        if result["succeeded"] or already:
+            # A redeemed hour can cover more than one slot, and Genesis will keep
+            # recommending every one of them until we exclude them ourselves.
+            redeemed: list[str] = []
+            for item in [*result["succeeded"], *already]:
+                start = item.get("start_datetime")
+                if not start:
+                    continue
+                try:
+                    first = datetime.strptime(start, "%Y-%m-%dT%H:%M:%S")
+                except (TypeError, ValueError):
+                    continue
+                for offset in range(max(1, int(item.get("duration_hours") or 1))):
+                    redeemed.append(
+                        (first + timedelta(hours=offset)).strftime("%Y-%m-%dT%H:%M:%S")
+                    )
+            await self.coordinator.async_record_redeemed(redeemed)
+        if result["succeeded"] or already:
+            await self.coordinator.async_request_refresh()
+        return result
 
 
 class PowerShoutOffersAvailableBinarySensor(
