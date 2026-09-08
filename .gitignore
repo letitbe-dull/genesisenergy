@@ -2,7 +2,3 @@ __pycache__/
 *.pyc
 .ruff_cache/
 venv/
-.assets/
-.docs/
-CLAUDE.md
-.scratch
