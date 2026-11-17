@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData, StatisticMeanType
-from homeassistant.components.recorder.statistics import async_add_external_statistics, get_last_statistics, statistics_during_period
+from homeassistant.components.recorder.statistics import STATISTIC_UNIT_TO_UNIT_CONVERTER, async_add_external_statistics, get_last_statistics, statistics_during_period
 
 from .const import (
     DOMAIN, LOGGER, DATA_API_ELECTRICITY_USAGE, DATA_API_GAS_USAGE, DATA_API_POWERSHOUT_INFO,
@@ -399,7 +399,9 @@ class GenesisEnergyStatisticsSensor(CoordinatorEntity[GenesisEnergyDataUpdateCoo
             if stats_to_add:
                 mode_str = "Overwrite" if force_overwrite else "Append"
                 LOGGER.info(f"  Importing {len(stats_to_add)} '{stat_name}' statistics (Mode: {mode_str}).")
-                meta = StatisticMetaData(has_mean=False, has_sum=True, mean_type=StatisticMeanType.NONE, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_of_measurement=unit)
+                converter = STATISTIC_UNIT_TO_UNIT_CONVERTER.get(unit)
+                unit_class = converter.UNIT_CLASS if converter else None
+                meta = StatisticMetaData(has_mean=False, has_sum=True, mean_type=StatisticMeanType.NONE, name=stat_name, source=DOMAIN, statistic_id=statistic_id, unit_class=unit_class, unit_of_measurement=unit)
                 async_add_external_statistics(self.hass, meta, stats_to_add)
                 # async_import_statistics(self.hass, meta, stats_to_add)
             else:
